@@ -8,6 +8,7 @@ import logging
 import os
 import uuid
 import shutil
+import time
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -94,11 +95,24 @@ def save_detection_object(prediction_uid, label, score, box):
 
 @app.post("/predict")
 def predict(file: UploadFile = File(...)):
+    start_time = time.time()
     """
     Predict objects in an image
     """
     ext = os.path.splitext(file.filename)[1]
+    print(ext)
     uid = str(uuid.uuid4())
+    allowed_extensions = [".jpg", ".jpeg", ".png"]
+
+    if ext not in allowed_extensions:
+
+        raise HTTPException(
+
+            status_code=400,
+
+            detail="Only image files are supported"
+
+        )
     original_path = os.path.join(UPLOAD_DIR, uid + ext)
     predicted_path = os.path.join(PREDICTED_DIR, uid + ext)
 
@@ -121,11 +135,12 @@ def predict(file: UploadFile = File(...)):
         bbox = box.xyxy[0].tolist()
         save_detection_object(uid, label, score, bbox)
         detected_labels.append(label)
-
+    processing_time = round(time.time() - start_time, 2)
     return {
         "prediction_uid": uid, 
         "detection_count": len(results[0].boxes),
-        "labels": detected_labels
+        "labels": detected_labels,
+        "time_took": processing_time
     }
 
 @app.get("/prediction/{uid}")
