@@ -25,3 +25,8 @@ jobs:
       - name: Run tests
         run: pytest tests/
         working-directory: services/yolo
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+        token: ${{ 64c14582-0e47-4437-b066-cf67d6d9f349 }}
