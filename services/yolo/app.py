@@ -24,14 +24,19 @@ Instrumentator().instrument(app).expose(app)
 # Confidence threshold for object detection (0.0 - 1.0).
 # Detections below this score are discarded.
 # Override with: export CONFIDENCE_THRESHOLD=0.7
-_raw_threshold = os.environ.get("CONFIDENCE_THRESHOLD")
-if _raw_threshold is not None:
-    CONFIDENCE_THRESHOLD = float(_raw_threshold)
-    logging.info(f"CONFIDENCE_THRESHOLD set to {CONFIDENCE_THRESHOLD} (from environment)")
-else:
-    CONFIDENCE_THRESHOLD = 0.5
-    logging.info(f"CONFIDENCE_THRESHOLD not set, using default: {CONFIDENCE_THRESHOLD}")
+def get_confidence_threshold():
+    raw_threshold = os.environ.get("CONFIDENCE_THRESHOLD")
 
+    if raw_threshold is not None:
+        threshold = float(raw_threshold)
+        logging.info(f"CONFIDENCE_THRESHOLD set to {threshold} (from environment)")
+        return threshold
+
+    logging.info("CONFIDENCE_THRESHOLD not set, using default: 0.5")
+    return 0.5
+
+
+CONFIDENCE_THRESHOLD = get_confidence_threshold()
 UPLOAD_DIR = "uploads/original"
 PREDICTED_DIR = "uploads/predicted"
 DB_PATH = "predictions.db"
@@ -202,8 +207,8 @@ def get_predictions_by_label(label: str):
     with the given label.
     """
     if label.strip() == "":
-        raise HTTPException(status_code=400, detail="Label cannot be empty")
-
+        raise HTTPException(status_code=400, detail="Label cannot be empty") 
+    
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
 
@@ -240,7 +245,39 @@ def get_predictions_by_label(label: str):
             })
 
         return response
-    
+@app.get("/predictions/score/{min_score}")
+def get_predictions_by_score(min_score: float):
+    """
+    Return all detection objects whose confidence score is greater than
+    or equal to min_score.
+    """
+    if min_score < 0.0 or min_score > 1.0:
+        raise HTTPException(
+            status_code=400,
+            detail="min_score must be between 0.0 and 1.0"
+        )
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+
+        objects = conn.execute("""
+            SELECT id, prediction_uid, label, score, box
+            FROM detection_objects
+            WHERE score >= ?
+            ORDER BY score DESC
+        """, (min_score,)).fetchall()
+
+        return [
+            {
+                "id": obj["id"],
+                "prediction_uid": obj["prediction_uid"],
+                "label": obj["label"],
+                "score": obj["score"],
+                "box": obj["box"]
+            }
+            for obj in objects
+        ]
+
 @app.get("/health")
 def health():
     """
@@ -248,7 +285,7 @@ def health():
     """
     return {"status": "ok"}
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     import uvicorn
 
     init_db()
