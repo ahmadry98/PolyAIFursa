@@ -46,3 +46,9 @@ services/frontend/.next/
 services/frontend/node_modules/
 services/frontend/out/
 
+coverage.xml
+
+htmlcov/
+
+.pytest_cache/coverage.xml
+htmlcov/
