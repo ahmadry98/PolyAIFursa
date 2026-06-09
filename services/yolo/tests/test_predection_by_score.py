@@ -8,16 +8,21 @@ from app import app, init_db, save_prediction_session, save_detection_object
 
 class TestPredictionsByScore(unittest.TestCase):
     def setUp(self):
+        # Use a temporary database for each test
         _, app_module.DB_PATH = tempfile.mkstemp(suffix=".db")
         init_db()
+
+        # Create FastAPI test client
         self.client = TestClient(app)
 
     def test_returns_objects_with_score_greater_than_or_equal_to_min_score(self):
+        # Create one high-score object and one low-score object
         save_prediction_session(
             "abc-123",
             "uploads/original/abc-123.jpg",
             "uploads/predicted/abc-123.jpg"
         )
+
         save_detection_object("abc-123", "person", 0.91, [10, 20, 100, 200])
         save_detection_object("abc-123", "car", 0.40, [30, 40, 150, 250])
 
@@ -26,18 +31,21 @@ class TestPredictionsByScore(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
 
         data = response.json()
+
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]["prediction_uid"], "abc-123")
         self.assertEqual(data[0]["label"], "person")
         self.assertEqual(data[0]["score"], 0.91)
 
     def test_returns_empty_list_when_no_scores_match(self):
+        # Verify empty result when no object reaches the minimum score
         response = self.client.get("/predictions/score/0.9")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), [])
 
     def test_min_score_below_zero_returns_400(self):
+        # Verify invalid score below 0 is rejected
         response = self.client.get("/predictions/score/-0.1")
 
         self.assertEqual(response.status_code, 400)
@@ -47,6 +55,7 @@ class TestPredictionsByScore(unittest.TestCase):
         )
 
     def test_min_score_above_one_returns_400(self):
+        # Verify invalid score above 1 is rejected
         response = self.client.get("/predictions/score/1.1")
 
         self.assertEqual(response.status_code, 400)

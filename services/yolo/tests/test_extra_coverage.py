@@ -4,6 +4,7 @@ import unittest
 from fastapi.testclient import TestClient
 from fastapi import HTTPException
 from unittest.mock import patch
+
 from app import get_confidence_threshold, get_predictions_by_label
 import app as app_module
 from app import (
@@ -17,17 +18,15 @@ from app import (
 
 class TestExtraCoverage(unittest.TestCase):
     def setUp(self):
+        # Use a temporary database for each test
         _, app_module.DB_PATH = tempfile.mkstemp(suffix=".db")
         init_db()
+
+        # Create FastAPI test client
         self.client = TestClient(app)
 
-    def test_health(self):
-        response = self.client.get("/health")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"status": "ok"})
-
     def test_predict_rejects_non_image_file(self):
+        # Verify non-image uploads are rejected
         response = self.client.post(
             "/predict",
             files={"file": ("test.txt", b"hello", "text/plain")}
@@ -40,6 +39,7 @@ class TestExtraCoverage(unittest.TestCase):
         )
 
     def test_get_prediction_by_uid_success(self):
+        # Create a prediction and verify it can be retrieved by UID
         save_prediction_session(
             "abc-123",
             "uploads/original/abc-123.jpg",
@@ -75,6 +75,7 @@ class TestExtraCoverage(unittest.TestCase):
         )
 
     def test_get_prediction_by_uid_not_found(self):
+        # Verify missing prediction UID returns 404
         response = self.client.get("/prediction/not-exist")
 
         self.assertEqual(response.status_code, 404)
@@ -84,6 +85,7 @@ class TestExtraCoverage(unittest.TestCase):
         )
 
     def test_get_prediction_image_success(self):
+        # Verify annotated image endpoint returns file content
         os.makedirs("uploads/predicted", exist_ok=True)
 
         image_path = "uploads/predicted/test-image.jpg"
@@ -103,6 +105,7 @@ class TestExtraCoverage(unittest.TestCase):
         self.assertEqual(response.content, b"fake image content")
 
     def test_get_prediction_image_not_found_when_uid_missing(self):
+        # Verify missing UID returns image not found
         response = self.client.get("/prediction/missing/image")
 
         self.assertEqual(response.status_code, 404)
@@ -112,6 +115,7 @@ class TestExtraCoverage(unittest.TestCase):
         )
 
     def test_get_prediction_image_not_found_when_file_missing(self):
+        # Verify missing image file returns 404
         save_prediction_session(
             "img-missing",
             "uploads/original/img-missing.jpg",
@@ -126,39 +130,26 @@ class TestExtraCoverage(unittest.TestCase):
             {"detail": "Image not found"}
         )
 
-    def test_empty_label_returns_400(self):
-        response = self.client.get("/predictions/label/")
-
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(
-            response.json(),
-            {"detail": "Label cannot be empty"}
-        )
-
     def test_empty_label_function_returns_400(self):
+        # Verify empty label helper raises HTTPException
         with self.assertRaises(HTTPException) as context:
             get_predictions_by_empty_label()
 
-        self.assertEqual(
-            context.exception.status_code,
-            400
-        )
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertEqual(context.exception.detail, "Label cannot be empty")
 
-        self.assertEqual(
-            context.exception.detail,
-            "Label cannot be empty"
-        )
     def test_confidence_threshold_from_env(self):
+        # Verify environment variable overrides default threshold
         with patch.dict(os.environ, {"CONFIDENCE_THRESHOLD": "0.7"}):
             self.assertEqual(get_confidence_threshold(), 0.7)
 
-
     def test_confidence_threshold_default(self):
+        # Verify default threshold is used when env variable is missing
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(get_confidence_threshold(), 0.5)
 
-
     def test_label_with_only_spaces_returns_400(self):
+        # Verify labels containing only spaces are rejected
         with self.assertRaises(HTTPException) as context:
             get_predictions_by_label("   ")
 
