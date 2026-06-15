@@ -21,6 +21,9 @@ torch.cuda.is_available = lambda: False
 
 # Create the FastAPI application
 app = FastAPI()
+@app.on_event("shutdown")
+def shutdown_event():
+    logging.info("Received SIGTERM - shutting down gracefully")
 logging.basicConfig(level=logging.INFO)
 
 def graceful_shutdown(signum, frame):
