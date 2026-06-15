@@ -9,6 +9,8 @@ import os
 import uuid
 import shutil
 import time
+import signal
+import sys
 
 # Configure logging so the app prints useful information while running
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -19,7 +21,13 @@ torch.cuda.is_available = lambda: False
 
 # Create the FastAPI application
 app = FastAPI()
+logging.basicConfig(level=logging.INFO)
 
+def graceful_shutdown(signum, frame):
+    logging.info("Received SIGTERM - shutting down gracefully")
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, graceful_shutdown)
 # Add Prometheus metrics endpoint at /metrics
 Instrumentator().instrument(app).expose(app)
 

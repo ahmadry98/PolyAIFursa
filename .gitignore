@@ -52,3 +52,5 @@ htmlcov/
 
 .pytest_cache/coverage.xml
 htmlcov/
+Ahmad-Key.pem
+*.pem
