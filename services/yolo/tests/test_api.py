@@ -9,7 +9,7 @@ from app import app, init_db
 
 # Sample image used by prediction tests
 TEST_IMAGE = os.path.join(os.path.dirname(__file__), "data", "beatles.jpeg")
-
+# testing branch protection
 
 @pytest.fixture(autouse=True)
 def setup_db(tmp_path, monkeypatch):
