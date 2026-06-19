@@ -14,7 +14,7 @@ jobs:
       - name: Deploy to Dev instance
         uses: appleboy/ssh-action@v1
         with:
-          host: ahmad-dev.fursa.click
+          host: dev.ahmad.fursa.click
           username: ubuntu
           key: ${{ secrets.DEV_INSTANCE_SSH_KEY }}
           script: |
@@ -34,7 +34,7 @@ jobs:
       - name: Deploy to Prod instance
         uses: appleboy/ssh-action@v1
         with:
-          host: ahmad-prod.fursa.click
+          host: prod.ahmad.fursa.click
           username: ubuntu
           key: ${{ secrets.PROD_INSTANCE_SSH_KEY }}
           script: |
