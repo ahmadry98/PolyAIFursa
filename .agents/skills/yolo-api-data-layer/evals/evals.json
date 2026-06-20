@@ -1,0 +1,88 @@
+[
+  {
+    "prompt": "refactor the api to use sqlalchemy",
+    "expected_output": "Refactors the YOLO API from raw SQLite to SQLAlchemy ORM while preserving all existing endpoint behavior.",
+    "assertions": [
+      "Creates services/yolo/models.py",
+      "Creates services/yolo/db.py",
+      "Defines PredictionSession SQLAlchemy model",
+      "Defines DetectionObject SQLAlchemy model",
+      "Uses FastAPI Depends(get_db)",
+      "Removes import sqlite3",
+      "Removes conn.execute usage",
+      "Uses SQLAlchemy sessions for persistence",
+      "Preserves existing endpoint URLs",
+      "Preserves existing response shapes",
+      "Updates tests for SQLAlchemy"
+    ]
+  },
+  {
+    "prompt": "add an endpoint GET /predictions/recent that returns the 10 most recent sessions",
+    "expected_output": "Creates a new endpoint that returns the 10 most recent prediction sessions using SQLAlchemy queries.",
+    "assertions": [
+      "Creates GET /predictions/recent endpoint",
+      "Uses PredictionSession model",
+      "Uses SQLAlchemy order_by descending timestamp",
+      "Uses limit(10)",
+      "Returns JSON response",
+      "Adds endpoint tests",
+      "Does not use raw SQL"
+    ]
+  },
+  {
+    "prompt": "add a UserFeedback table to track user ratings per prediction",
+    "expected_output": "Adds a SQLAlchemy UserFeedback model linked to PredictionSession.",
+    "assertions": [
+      "Creates UserFeedback model",
+      "Uses SQLAlchemy ORM",
+      "Defines relationship to PredictionSession",
+      "Includes rating field",
+      "Includes comment field",
+      "Includes created_at field",
+      "Updates database models",
+      "Adds tests",
+      "Does not use sqlite3"
+    ]
+  },
+  {
+    "prompt": "delete a prediction session and all its detection objects by uid",
+    "expected_output": "Implements deletion of a prediction session and all related detection objects using SQLAlchemy.",
+    "assertions": [
+      "Uses ORM deletion",
+      "Deletes matching PredictionSession",
+      "Deletes related DetectionObjects",
+      "Uses cascade delete or equivalent SQLAlchemy relationship",
+      "Adds deletion tests",
+      "Does not use DELETE FROM SQL strings",
+      "Does not use conn.execute"
+    ]
+  },
+  {
+    "prompt": "add a column processing_time_ms to the prediction_sessions table",
+    "expected_output": "Adds a new SQLAlchemy column and persists processing time information.",
+    "assertions": [
+      "Adds processing_time_ms column to PredictionSession",
+      "Uses SQLAlchemy Column definition",
+      "Updates persistence logic",
+      "Updates retrieval logic if required",
+      "Adds tests",
+      "Does not use ALTER TABLE SQL strings"
+    ]
+  },
+  {
+    "prompt": "make the database backend configurable so we can use postgres in production",
+    "expected_output": "Supports SQLite by default and PostgreSQL through environment variables.",
+    "assertions": [
+      "Supports DB_BACKEND environment variable",
+      "Supports DB_USER environment variable",
+      "Supports DB_PASSWORD environment variable",
+      "Creates PostgreSQL connection URL",
+      "Keeps SQLite as default backend",
+      "Uses create_engine",
+      "Uses SessionLocal",
+      "Uses get_db dependency",
+      "Updates requirements with PostgreSQL driver",
+      "Adds tests or validation for configuration"
+    ]
+  }
+]
