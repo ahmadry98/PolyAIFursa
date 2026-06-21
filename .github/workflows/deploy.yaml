@@ -1,4 +1,4 @@
-name: Deploy Yolo
+name: Deploy PolyAI
 
 on:
   push:
@@ -21,11 +21,29 @@ jobs:
             cd /home/ubuntu/PolyAIFursa
             git fetch origin
             git reset --hard origin/dev
-            cd services/yolo
+
+            sudo cp deploy/systemd/*.service /etc/systemd/system/
+            sudo systemctl daemon-reload
+
+            cd /home/ubuntu/PolyAIFursa/services/yolo
             source .venv/bin/activate
             pip install -r requirements.txt
-            sudo systemctl restart yolo
+            python -c "import app; app.init_db()"
+
+            cd /home/ubuntu/PolyAIFursa/services/agent
+            source .venv/bin/activate
+            pip install -r requirements.txt
+
+            cd /home/ubuntu/PolyAIFursa/services/frontend
+            npm install
+            npm run build
+
+            sudo systemctl enable yolo agent frontend
+            sudo systemctl restart yolo agent frontend
+
             sudo systemctl status yolo --no-pager
+            sudo systemctl status agent --no-pager
+            sudo systemctl status frontend --no-pager
 
   deploy-prod:
     if: github.ref == 'refs/heads/main'
@@ -41,8 +59,26 @@ jobs:
             cd /home/ubuntu/PolyAIFursa
             git fetch origin
             git reset --hard origin/main
-            cd services/yolo
+
+            sudo cp deploy/systemd/*.service /etc/systemd/system/
+            sudo systemctl daemon-reload
+
+            cd /home/ubuntu/PolyAIFursa/services/yolo
             source .venv/bin/activate
             pip install -r requirements.txt
-            sudo systemctl restart yolo
+            python -c "import app; app.init_db()"
+
+            cd /home/ubuntu/PolyAIFursa/services/agent
+            source .venv/bin/activate
+            pip install -r requirements.txt
+
+            cd /home/ubuntu/PolyAIFursa/services/frontend
+            npm install
+            npm run build
+
+            sudo systemctl enable yolo agent frontend
+            sudo systemctl restart yolo agent frontend
+
             sudo systemctl status yolo --no-pager
+            sudo systemctl status agent --no-pager
+            sudo systemctl status frontend --no-pager
