@@ -1,0 +1,14 @@
+[Unit]
+Description=Yolo FastAPI Service
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PolyAIFursa/services/yolo
+
+ExecStart=/home/ubuntu/PolyAIFursa/services/yolo/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8080
+
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
