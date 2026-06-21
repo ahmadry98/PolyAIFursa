@@ -112,6 +112,8 @@ app.add_middleware(
     allow_origins=[
         "http://32.197.155.17:3000",
         "http://dev.ahmad.fursa.click:3000",
+        "http://67.202.49.42:3000",
+        "http://prod.ahmad.fursa.click:3000",
     ],
     allow_credentials=False,
     allow_methods=["*"],
