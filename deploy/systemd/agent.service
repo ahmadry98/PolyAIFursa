@@ -1,0 +1,13 @@
+[Unit]
+Description=PolyAI Agent Service
+After=network.target yolo.service
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PolyAIFursa/services/agent
+EnvironmentFile=/home/ubuntu/PolyAIFursa/services/agent/.env
+ExecStart=/home/ubuntu/PolyAIFursa/services/agent/.venv/bin/python app.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

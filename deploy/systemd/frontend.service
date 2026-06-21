@@ -1,0 +1,13 @@
+[Unit]
+Description=PolyAI Frontend Service
+After=network.target agent.service
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PolyAIFursa/services/frontend
+EnvironmentFile=/home/ubuntu/PolyAIFursa/services/frontend/.env.local
+ExecStart=/usr/bin/npm run start -- -H 0.0.0.0 -p 3000
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
