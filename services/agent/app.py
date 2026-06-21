@@ -71,38 +71,51 @@ TOOLS = {
 
 llm = init_chat_model(MODEL, temperature=0)
 llm_with_tools = llm.bind_tools(list(TOOLS.values()))
-
-def run_agent(history: list) -> str:
+def run_agent(history: list, max_iterations: int = 10) -> tuple[str, Optional[str]]:
     """
-    Simple ReAct loop:
-      1. Send messages to the LLM.
-      2. If the LLM requests tool calls, execute them and append results.
-      3. Repeat until the LLM returns a plain text response.
+    Simple ReAct loop with max_iterations guard.
+    Returns:
+      - final assistant text
+      - annotated image URL, if YOLO was used
     """
     messages = [SystemMessage(content=SYSTEM_PROMPT)] + history
+    annotated_image_url = None
 
-    while True:
+    for _ in range(max_iterations):
         response: AIMessage = llm_with_tools.invoke(messages)
         messages.append(response)
-
-        # No tool calls, the model produced its final answer
         if not response.tool_calls:
-            return response.content
+            return response.content, annotated_image_url
 
-        # Execute every tool the model requested
         for tool_call in response.tool_calls:
             tool_fn = TOOLS[tool_call["name"]]
-            tool_result = tool_fn.invoke(tool_call)          # returns a ToolMessage
+            tool_result = tool_fn.invoke(tool_call)
             messages.append(tool_result)
 
+            try:
+                data = json.loads(tool_result.content)
+                uid = data.get("prediction_uid")
+                if uid:
+                    annotated_image_url = f"{YOLO_SERVICE_URL}/prediction/{uid}/image"
+            except Exception:
+                pass
+
+    return (
+        "The agent stopped because it reached the maximum number of iterations.",
+        annotated_image_url,
+    )
 
 app = FastAPI(title="Vision Agent")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_methods=["POST", "GET"],
-    allow_headers=["Content-Type"],
+    allow_origins=[
+        "http://32.197.155.17:3000",
+        "http://dev.ahmad.fursa.click:3000",
+    ],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -118,7 +131,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     response: str
-
+    annotated_image_url: Optional[str] = None
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
@@ -138,7 +151,11 @@ def chat(request: ChatRequest):
 
     token = _current_image_b64.set(latest_image)
     try:
-        return ChatResponse(response=run_agent(lc_messages))
+        response_text, annotated_image_url = run_agent(lc_messages)
+        return ChatResponse(
+            response=response_text,
+            annotated_image_url=annotated_image_url,
+        )
     finally:
         _current_image_b64.reset(token)
 
