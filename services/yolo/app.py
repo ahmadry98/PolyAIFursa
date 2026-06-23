@@ -11,7 +11,7 @@ import shutil
 import time
 import signal
 import sys
-
+from pydantic import BaseModel
 # Configure logging so the app prints useful information while running
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -20,7 +20,24 @@ import torch
 torch.cuda.is_available = lambda: False
 
 # Create the FastAPI application
+
 app = FastAPI()
+class DetectionObjectResponse(BaseModel):
+    id: int
+    label: str
+    score: float
+    box: list[float]
+
+
+class PredictionResponse(BaseModel):
+    uid: str
+    timestamp: str
+    original_image: str
+    predicted_image: str
+    detection_objects: list[DetectionObjectResponse]
+    detection_count: int
+    labels: list[str]
+    time_took: float
 @app.on_event("shutdown")
 def shutdown_event():
     logging.info("Received SIGTERM - shutting down gracefully")
@@ -124,7 +141,7 @@ def save_detection_object(prediction_uid, label, score, box):
         """, (prediction_uid, label, score, str(box)))
 
 
-@app.post("/predict")
+@app.post("/predict", response_model=PredictionResponse)
 def predict(file: UploadFile = File(...)):
     """
     Upload an image, run YOLO object detection, save the result,
@@ -169,7 +186,7 @@ def predict(file: UploadFile = File(...)):
 
     # Save each detected object in the database
     detected_labels = []
-
+    detection_objects = []
     for box in results[0].boxes:
         label_idx = int(box.cls[0].item())
         label = model.names[label_idx]
@@ -180,15 +197,29 @@ def predict(file: UploadFile = File(...)):
 
         detected_labels.append(label)
 
+        detection_objects.append(
+        DetectionObjectResponse(
+                id=len(detection_objects),
+                label=label,
+                score=score,
+                box=bbox
+        )
+        )
+
+
     # Calculate total processing time
     processing_time = round(time.time() - start_time, 2)
 
-    return {
-        "prediction_uid": uid,
-        "detection_count": len(results[0].boxes),
-        "labels": detected_labels,
-        "time_took": processing_time
-    }
+    return PredictionResponse(
+    uid=uid,
+    timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    original_image=original_path,
+    predicted_image=predicted_path,
+    detection_objects=detection_objects,
+    detection_count=len(detection_objects),
+    labels=detected_labels,
+    time_took=processing_time,
+)
 
 
 @app.get("/prediction/{uid}")
