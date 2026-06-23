@@ -6,7 +6,36 @@ description: Use when changing persistence, database models, queries, API schema
 # Evolving the YOLO Data Layer
 
 ## Overview
+## YOLO Project Contract
 
+The existing YOLO service stores two main entities:
+
+Prediction sessions:
+
+- `uid`
+- `timestamp`
+- `original_image`
+- `predicted_image`
+
+Detection objects:
+
+- `id`
+- `prediction_uid`
+- `label`
+- `score`
+- `box`
+
+The refactor must preserve the behavior of the existing YOLO endpoints, including:
+
+- `GET /health`
+- `POST /predict`
+- `GET /prediction/{uid}`
+- `GET /prediction/{uid}/image`
+- `GET /predictions/label/{label}`
+- `GET /predictions/score/{min_score}`
+- `GET /metrics`
+
+Do not remove endpoint behavior just because the storage layer changed.
 Treat a database change as an API-preserving migration, not a storage rewrite. Keep HTTP behavior stable while moving persistence behind explicit SQLAlchemy models, sessions, and repository-style functions.
 
 ## Invariants
@@ -78,7 +107,21 @@ Define the contract in this order:
 Database constraints protect invariants; API validation produces friendly errors. Use both where appropriate. Convert expected integrity failures into the established API error shape rather than leaking SQLAlchemy exceptions.
 
 ## Test Contract
+Before finishing, inspect every file under `services/yolo/tests/`, including duplicate or copied files with spaces or suffixes such as:
 
+- `test_extra_coverage 2.py`
+- `test_predection_by_score 2.py`
+- `test_predection_bylabel 2.py`
+
+All tests must be migrated away from old raw-SQL helpers.
+
+Tests must not import removed helpers from `app.py`, including:
+
+- `init_db`
+- `save_prediction_session`
+- `save_detection_object`
+
+Do not restore these helpers just to satisfy old tests. Update the tests to use SQLAlchemy models, sessions, and dependency overrides instead.
 Tests must cover:
 
 - Existing routes before and after the refactor, including exact response shape and status codes.
@@ -91,7 +134,8 @@ Tests must cover:
 Build a fresh engine/session factory for the test database, create the schema, override the FastAPI dependency, and tear the schema down. For in-memory SQLite shared across connections, use `StaticPool`; otherwise prefer a temporary file database. PostgreSQL tests must use a dedicated disposable database or schema.
 
 ## Common Mistakes
-
+| Old tests import removed helpers from `app.py` | Update tests to use SQLAlchemy sessions and dependency overrides; do not restore raw-SQL helper functions |
+| Duplicate test files with spaces still run in pytest | Inspect all `tests/test*.py` files and update or remove stale duplicates |
 | Mistake | Correction |
 |---|---|
 | ORM objects become response schemas accidentally | Keep Pydantic schemas explicit and enable attribute-based validation deliberately |
@@ -114,5 +158,7 @@ Build a fresh engine/session factory for the test database, create the schema, o
 - [ ] Both backend suites pass, or an unavailable backend is reported explicitly.
 - [ ] Deployed schema changes include a migration strategy.
 - [ ] Legacy persistence code is removed only after parity is proven.
-
+- [ ] Every `services/yolo/tests/test*.py` file collects successfully under pytest.
+- [ ] No test imports `init_db`, `save_prediction_session`, or `save_detection_object` from `app.py`.
+- [ ] No stale duplicate test file still depends on the old raw SQLite implementation.
 Do not claim completion from code inspection alone. Report the exact tests run, backend URLs by dialect only (never credentials), and any unverified compatibility risk.
