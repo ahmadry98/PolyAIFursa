@@ -2,6 +2,7 @@ import base64
 import io
 import json
 import logging
+import time
 import os
 from contextvars import ContextVar
 from typing import Optional
@@ -71,7 +72,7 @@ TOOLS = {
 
 llm = init_chat_model(MODEL, temperature=0)
 llm_with_tools = llm.bind_tools(list(TOOLS.values()))
-def run_agent(history: list, max_iterations: int = 10) -> tuple[str, Optional[str]]:
+def run_agent(history: list, max_iterations: int = 10):    
     """
     Simple ReAct loop with max_iterations guard.
     Returns:
@@ -79,31 +80,52 @@ def run_agent(history: list, max_iterations: int = 10) -> tuple[str, Optional[st
       - annotated image URL, if YOLO was used
     """
     messages = [SystemMessage(content=SYSTEM_PROMPT)] + history
-    annotated_image_url = None
+    start_time = time.time()
 
-    for _ in range(max_iterations):
+    annotated_image_url = None
+    prediction_id = None
+    tools_called = []
+    iterations = 0
+
+    for iteration in range(max_iterations):
+        iterations = iteration + 1
         response: AIMessage = llm_with_tools.invoke(messages)
         messages.append(response)
         if not response.tool_calls:
-            return response.content, annotated_image_url
+            return {
+                "response": response.content,
+                "prediction_id": prediction_id,
+                "annotated_image_url": annotated_image_url,
+                "agent_loop_time_s": round(time.time() - start_time, 2),
+                "iterations": iterations,
+                "tools_called": tools_called,
+                "context_limit_exceeded": False,
+    }
 
         for tool_call in response.tool_calls:
+            tools_called.append(tool_call["name"])
             tool_fn = TOOLS[tool_call["name"]]
             tool_result = tool_fn.invoke(tool_call)
             messages.append(tool_result)
 
             try:
                 data = json.loads(tool_result.content)
-                uid = data.get("prediction_uid")
+                uid = data.get("uid") or data.get("prediction_uid")
                 if uid:
+                    prediction_id = uid
                     annotated_image_url = f"{YOLO_SERVICE_URL}/prediction/{uid}/image"
             except Exception:
                 pass
 
-    return (
-        "The agent stopped because it reached the maximum number of iterations.",
-        annotated_image_url,
-    )
+    return {
+    "response": "The agent stopped because it reached the maximum number of iterations.",
+    "prediction_id": prediction_id,
+    "annotated_image_url": annotated_image_url,
+    "agent_loop_time_s": round(time.time() - start_time, 2),
+    "iterations": iterations,
+    "tools_called": tools_called,
+    "context_limit_exceeded": True,
+    }
 
 app = FastAPI(title="Vision Agent")
 
@@ -129,9 +151,20 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]         # full conversation thread, oldest first
 
 
+class TokenUsage(BaseModel):
+    input: int = 0
+    output: int = 0
+    total: int = 0
+
+
 class ChatResponse(BaseModel):
     response: str
+    prediction_id: Optional[str] = None
     annotated_image_url: Optional[str] = None
+    agent_loop_time_s: float
+    iterations: int
+    tools_called: list[str]
+    context_limit_exceeded: bool = False
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
@@ -151,11 +184,8 @@ def chat(request: ChatRequest):
 
     token = _current_image_b64.set(latest_image)
     try:
-        response_text, annotated_image_url = run_agent(lc_messages)
-        return ChatResponse(
-            response=response_text,
-            annotated_image_url=annotated_image_url,
-        )
+        result = run_agent(lc_messages)
+        return ChatResponse(**result)
     finally:
         _current_image_b64.reset(token)
 
