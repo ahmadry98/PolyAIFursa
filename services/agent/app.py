@@ -87,6 +87,7 @@ def run_agent(history: list, max_iterations: int = 10):
     start_time = time.time()
 
     annotated_image_url = None
+    annotated_image = None
     prediction_id = None
     tools_called = []
     iterations = 0
@@ -106,7 +107,7 @@ def run_agent(history: list, max_iterations: int = 10):
             return {
                 "response": response.content,
                 "prediction_id": prediction_id,
-                "annotated_image": None,
+                "annotated_image": annotated_image,
                 "annotated_image_url": annotated_image_url,
                 "agent_loop_time_s": round(time.time() - start_time, 2),
                 "iterations": iterations,
@@ -124,16 +125,27 @@ def run_agent(history: list, max_iterations: int = 10):
             try:
                 data = json.loads(tool_result.content)
                 uid = data.get("uid") or data.get("prediction_uid")
+                predicted_image_path = data.get("predicted_image")
                 if uid:
                     prediction_id = uid
                     annotated_image_url = f"{YOLO_SERVICE_URL}/prediction/{uid}/image"
-            except Exception:
-                pass
+                if predicted_image_path:
+                    try:
+                        with open(
+                            f"/home/ubuntu/PolyAIFursa/services/yolo/{predicted_image_path}",
+                            "rb"
+                        ) as image_file:
+                            annotated_image = base64.b64encode(
+                                image_file.read()
+                            ).decode("utf-8")
+                    except Exception:
+                        pass
+
 
     return {
     "response": "The agent stopped because it reached the maximum number of iterations.",
     "prediction_id": prediction_id,
-    "annotated_image": None,
+    "annotated_image": annotated_image,
     "annotated_image_url": annotated_image_url,
     "agent_loop_time_s": round(time.time() - start_time, 2),
     "iterations": iterations,
