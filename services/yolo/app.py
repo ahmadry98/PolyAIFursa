@@ -186,7 +186,7 @@ def predict(file: UploadFile = File(...)):
 
     # Save each detected object in the database
     detected_labels = []
-
+    detection_objects = []
     for box in results[0].boxes:
         label_idx = int(box.cls[0].item())
         label = model.names[label_idx]
@@ -196,14 +196,15 @@ def predict(file: UploadFile = File(...)):
         save_detection_object(uid, label, score, bbox)
 
         detected_labels.append(label)
+
         detection_objects.append(
-            DetectionObjectResponse(
-            id=len(detection_objects),
-            label=label,
-            score=score,
-            box=bbox,
-            )
-    )
+        DetectionObjectResponse(
+                id=len(detection_objects),
+                label=label,
+                score=score,
+                box=bbox
+        )
+        )
 
 
     # Calculate total processing time
