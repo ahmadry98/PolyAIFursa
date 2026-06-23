@@ -55,3 +55,11 @@ htmlcov/
 Ahmad-Key.pem
 *.pem
 AWSCLIV2.pkg
+.claude/skills/writing-skills/anthropic-best-practices.md
+.claude/skills/writing-skills/graphviz-conventions.dot
+.claude/skills/writing-skills/persuasion-principles.md
+.claude/skills/writing-skills/render-graphs.js
+.claude/skills/writing-skills/SKILL.md
+.claude/skills/writing-skills/testing-skills-with-subagents.md
+.claude/skills/writing-skills/examples/CLAUDE_MD_TESTING.md
+skills-lock.json
