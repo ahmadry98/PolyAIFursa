@@ -118,28 +118,38 @@ def run_agent(history: list, max_iterations: int = 10):
 
         for tool_call in response.tool_calls:
             tools_called.append(tool_call["name"])
+
             tool_fn = TOOLS[tool_call["name"]]
             tool_result = tool_fn.invoke(tool_call)
             messages.append(tool_result)
 
             try:
                 data = json.loads(tool_result.content)
+
                 uid = data.get("uid") or data.get("prediction_uid")
                 predicted_image_path = data.get("predicted_image")
+
                 if uid:
                     prediction_id = uid
-                    annotated_image_url = f"{YOLO_SERVICE_URL}/prediction/{uid}/image"
+                    annotated_image_url = (
+                        f"{YOLO_SERVICE_URL}/prediction/{uid}/image"
+                    )
+
                 if predicted_image_path:
-                    try:
-                        with open(
-                            f"/home/ubuntu/PolyAIFursa/services/yolo/{predicted_image_path}",
-                            "rb"
-                        ) as image_file:
-                            annotated_image = base64.b64encode(
-                                image_file.read()
-                            ).decode("utf-8")
-                    except Exception:
-                        pass
+                    image_path = (
+                        f"/home/ubuntu/PolyAIFursa/services/yolo/"
+                        f"{predicted_image_path}"
+                    )
+
+                    with open(image_path, "rb") as image_file:
+                        annotated_image = base64.b64encode(
+                            image_file.read()
+                        ).decode("utf-8")
+
+            except Exception:
+                logging.exception(
+                    "Failed to process YOLO response or annotated image"
+                )
 
 
     return {
