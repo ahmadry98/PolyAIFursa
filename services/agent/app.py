@@ -72,6 +72,10 @@ TOOLS = {
 
 llm = init_chat_model(MODEL, temperature=0)
 llm_with_tools = llm.bind_tools(list(TOOLS.values()))
+class TokenUsage(BaseModel):
+    input: int = 0
+    output: int = 0
+    total: int = 0
 def run_agent(history: list, max_iterations: int = 10):    
     """
     Simple ReAct loop with max_iterations guard.
@@ -86,21 +90,30 @@ def run_agent(history: list, max_iterations: int = 10):
     prediction_id = None
     tools_called = []
     iterations = 0
-
+    tokens_used = TokenUsage()
     for iteration in range(max_iterations):
         iterations = iteration + 1
         response: AIMessage = llm_with_tools.invoke(messages)
         messages.append(response)
+        usage = response.usage_metadata or {}
+
+        tokens_used = TokenUsage(
+        input=usage.get("input_tokens", 0),
+        output=usage.get("output_tokens", 0),
+        total=usage.get("total_tokens", 0),
+        )
         if not response.tool_calls:
             return {
                 "response": response.content,
                 "prediction_id": prediction_id,
+                "annotated_image": None,
                 "annotated_image_url": annotated_image_url,
                 "agent_loop_time_s": round(time.time() - start_time, 2),
                 "iterations": iterations,
                 "tools_called": tools_called,
                 "context_limit_exceeded": False,
-    }
+                "tokens_used": tokens_used,
+            }
 
         for tool_call in response.tool_calls:
             tools_called.append(tool_call["name"])
@@ -120,12 +133,14 @@ def run_agent(history: list, max_iterations: int = 10):
     return {
     "response": "The agent stopped because it reached the maximum number of iterations.",
     "prediction_id": prediction_id,
+    "annotated_image": None,
     "annotated_image_url": annotated_image_url,
     "agent_loop_time_s": round(time.time() - start_time, 2),
     "iterations": iterations,
     "tools_called": tools_called,
     "context_limit_exceeded": True,
-    }
+    "tokens_used": tokens_used,
+}
 
 app = FastAPI(title="Vision Agent")
 
@@ -151,20 +166,19 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]         # full conversation thread, oldest first
 
 
-class TokenUsage(BaseModel):
-    input: int = 0
-    output: int = 0
-    total: int = 0
+
 
 
 class ChatResponse(BaseModel):
     response: str
     prediction_id: Optional[str] = None
+    annotated_image: Optional[str] = None
     annotated_image_url: Optional[str] = None
     agent_loop_time_s: float
     iterations: int
     tools_called: list[str]
     context_limit_exceeded: bool = False
+    tokens_used: TokenUsage
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
