@@ -2,7 +2,8 @@
 name: yolo-api-data-layer
 description: Refactor or extend persistence, SQLAlchemy models, repositories, transactions, timestamps, database configuration, API schemas, and database-backed tests in the YOLO FastAPI service. Use for SQLite or PostgreSQL changes under services/yolo.
 ---
-
+## Use the Evals files 
+use the evals that are in the folder evals 
 # Evolve the YOLO Data Layer
 
 Treat persistence work as an API-preserving migration. Keep the code explicit enough for students to trace a request from the FastAPI route through the repository and transaction.
