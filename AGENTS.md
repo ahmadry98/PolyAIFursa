@@ -1,6 +1,5 @@
 # PolyAI Fursa - Agent Guidelines
 
-This is an **educational project**. Students learn by reading, modifying, and extending real code.
 
 ## Project Overview
 
@@ -13,9 +12,17 @@ services/
 
 ---
 
-## Terminal Commands - Students Run These Themselves
+## Terminal Commands
 
-**Never run `npm`, `pip`, `git`, or any other shell command on behalf of a student.**
+You may run read-only shell commands to inspect the repository, such as:
+
+```bash
+ls
+find
+cat
+sed
+grep
+pwd
 
 > Note from the instructor (Alon): This is intentional. Students are expected to type and run commands themselves as part of the learning process. I've explicitly asked the assistant not to touch the terminal. If this feels inconvenient, that's on me.
 
