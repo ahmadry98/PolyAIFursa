@@ -1,0 +1,154 @@
+[
+  {
+    "name": "raw-sqlite-to-sqlalchemy-contract-preservation",
+    "prompt": "Refactor the YOLO API from raw sqlite3 calls to SQLAlchemy. This is only an internal cleanup: do not change any endpoint contract. Keep the project's existing database environment-variable interface. Update the tests too.",
+    "expected_output": "The agent performs an incremental SQLAlchemy refactor with separate model and session modules, removes application raw SQL, and proves that every existing HTTP contract remains unchanged.",
+    "assertions": [
+      "Creates services/yolo/models.py containing PredictionSession and DetectionObject ORM models",
+      "Creates services/yolo/database.py containing Base, engine, SessionLocal, and get_db",
+      "Uses one DATABASE_URL to configure SQLite or PostgreSQL",
+      "Defaults SQLite to sqlite:///./predictions.db",
+      "Accepts a PostgreSQL SQLAlchemy URL without passing SQLite-only engine options",
+      "Uses db: Session = Depends(get_db) in database-backed routes",
+      "Removes sqlite3 imports, raw connection management, and raw CRUD SQL from application code",
+      "Preserves every existing route path, HTTP method, status code, and response shape",
+      "Preserves POST /predict fields uid, timestamp, detection_count, labels, and time_took",
+      "Migrates one persistence path at a time or otherwise explains how behavioral parity is protected",
+      "Updates tests to override get_db with an isolated SQLAlchemy session"
+    ]
+  },
+  {
+    "name": "resist-api-cleanup-during-data-refactor",
+    "prompt": "While moving the YOLO service to SQLAlchemy, clean up the awkward API too: rename prediction_uid to id, return detections instead of labels, and use 201 for /predict. We need this finished quickly, so update the tests to match your cleaner response.",
+    "expected_output": "The agent recognizes that the requested database refactor and API redesign are separate changes, preserves the established API unless the user explicitly confirms the breaking redesign, and does not make compatibility tests pass by rewriting their expectations.",
+    "assertions": [
+      "Identifies uid, timestamp, labels, time_took, and existing status codes as compatibility constraints",
+      "Does not silently rename response fields or change status codes as part of the persistence refactor",
+      "Keeps compatibility tests asserting the pre-refactor API contract",
+      "Separates any proposed breaking API redesign from the SQLAlchemy migration",
+      "Does not justify contract changes as necessary for SQLAlchemy"
+    ]
+  },
+  {
+    "name": "sqlite-and-postgres-portability",
+    "prompt": "Make the new SQLAlchemy data layer work on our default SQLite setup and on PostgreSQL in deployment. The current SQLite tests pass, so keep the solution simple and avoid adding PostgreSQL-specific tests.",
+    "expected_output": "The agent implements dialect-aware engine configuration and portable models and queries, while rejecting SQLite-only test success as evidence of PostgreSQL compatibility.",
+    "assertions": [
+      "Applies check_same_thread only to SQLite",
+      "Does not pass SQLite connect_args to PostgreSQL",
+      "Uses SQLAlchemy types and expressions rather than SQLite-specific encodings or SQL",
+      "Does not rely on implicit row order, INSERT OR REPLACE, or SQLite date functions",
+      "Keeps the configured SQLite default and PostgreSQL environment-variable behavior",
+      "Adds or specifies PostgreSQL integration coverage",
+      "Reports PostgreSQL as unverified if that backend cannot actually be tested"
+    ]
+  },
+  {
+    "name": "recent-predictions-query-contract",
+    "prompt": "Add GET /predictions/recent, returning the ten most recent prediction sessions in the API's existing JSON style. There may be fewer than ten rows, and timestamps can tie.",
+    "expected_output": "The agent adds a dependency-injected, ORM-backed endpoint with deterministic newest-first ordering, a limit of ten, and boundary-focused tests.",
+    "assertions": [
+      "Adds GET /predictions/recent without changing existing routes",
+      "Uses PredictionSession and db: Session = Depends(get_db)",
+      "Orders by PredictionSession.timestamp descending",
+      "Adds a deterministic secondary ordering rule for tied timestamps",
+      "Limits the query to 10 results",
+      "Uses no raw SQL",
+      "Returns a response shape consistent with existing API schemas",
+      "Tests zero, fewer than ten, exactly ten, and more than ten rows",
+      "Tests newest-first ordering, including tied timestamps"
+    ]
+  },
+  {
+    "name": "feedback-model-and-schema-evolution",
+    "prompt": "Add UserFeedback so users can attach one rating and an optional comment to a prediction. Existing developer databases already contain prediction data; do not destroy it.",
+    "expected_output": "The agent extends the ORM model safely, defines ownership and integrity rules, preserves existing data, and distinguishes fresh-database table creation from evolution of an existing schema.",
+    "assertions": [
+      "Adds UserFeedback to services/yolo/models.py",
+      "Defines an id primary key, prediction_uid foreign key, rating, optional comment, and created_at",
+      "Defines the relationship to PredictionSession with explicit ownership or cascade semantics",
+      "Adds a uniqueness rule enforcing one feedback record per prediction when required by the prompt",
+      "Defines or validates the permitted rating range",
+      "Uses SQLAlchemy metadata for fresh test databases and no raw CREATE TABLE or ALTER TABLE strings",
+      "Does not claim Base.metadata.create_all migrates an already-existing table",
+      "Provides a non-destructive schema-evolution strategy for existing databases",
+      "Tests valid feedback, invalid ratings, duplicate feedback, and a missing prediction UID"
+    ]
+  },
+  {
+    "name": "cascade-delete-and-rollback",
+    "prompt": "Delete a prediction session by UID and remove all of its detection objects. If any part of deletion fails, the database must remain unchanged. Preserve the API's current not-found behavior.",
+    "expected_output": "The agent implements ORM deletion with explicit cascade semantics and an atomic transaction, while preserving success and not-found contracts.",
+    "assertions": [
+      "Looks up PredictionSession by UID through SQLAlchemy",
+      "Deletes related DetectionObject rows through configured ORM cascade or equivalent ORM behavior",
+      "Does not use raw DELETE SQL",
+      "Commits once after the complete successful operation",
+      "Rolls back the transaction when deletion fails",
+      "Leaves no orphaned detection objects",
+      "Preserves the established success and missing-UID status codes and response shapes",
+      "Tests successful deletion, child deletion, missing UID, and rollback after a forced failure"
+    ]
+  },
+  {
+    "name": "add-column-without-breaking-predict",
+    "prompt": "Persist processing_time_ms on prediction sessions. Existing clients still require the /predict field time_took, and existing databases may already have rows.",
+    "expected_output": "The agent adds the ORM field and persistence behavior without changing the HTTP contract, accounts for old rows and existing schemas, and updates focused tests.",
+    "assertions": [
+      "Adds processing_time_ms to PredictionSession with an appropriate SQLAlchemy type and nullability/default decision",
+      "Persists processing time during /predict",
+      "Keeps the time_took response field and all other /predict response fields unchanged",
+      "Does not emit raw ALTER TABLE SQL from application code",
+      "Explains how the existing schema gains the column without data loss",
+      "Accounts explicitly for pre-existing rows",
+      "Tests persisted processing time and exact /predict response compatibility"
+    ]
+  },
+  {
+    "name": "predict-tests-use-real-data-layer-boundary",
+    "prompt": "Write reliable tests for POST /predict after the SQLAlchemy refactor. Tests must not load the real YOLO model and must not touch a developer database.",
+    "expected_output": "The agent tests the FastAPI endpoint through TestClient, mocks only the external model boundary, and injects an isolated SQLAlchemy database through FastAPI dependency overrides.",
+    "assertions": [
+      "Uses FastAPI TestClient",
+      "Mocks the YOLO model instead of loading it",
+      "Overrides app.dependency_overrides[get_db]",
+      "Creates a fresh SQLAlchemy engine and session factory for tests",
+      "Creates tables with Base.metadata.create_all and cleans them with drop_all or equivalent isolation",
+      "Uses StaticPool when sharing an in-memory SQLite database across connections, or uses a temporary file database",
+      "Does not patch DB_PATH, invoke legacy init_db, import sqlite3, or use a developer database",
+      "Asserts uid, timestamp, detection_count, labels, and time_took exactly",
+      "Asserts the expected PredictionSession and DetectionObject rows were committed",
+      "Clears dependency overrides during teardown even when a test fails"
+    ]
+  },
+  {
+    "name": "utc-timestamp-single-source-of-truth",
+    "prompt": "Make prediction timestamps clear and reliable across SQLite and PostgreSQL. The POST response and later GET response must describe the same creation time, and timestamp ties must not make list ordering flaky.",
+    "expected_output": "The agent defines timestamp as prediction creation time, persists one UTC value, serializes it consistently as RFC 3339, and adds persistence, response, and deterministic-order tests.",
+    "assertions": [
+      "Distinguishes the persisted creation timestamp from processing duration time_took",
+      "Uses DateTime(timezone=True) with a timezone-aware UTC default",
+      "Does not independently generate a second timestamp for the POST response",
+      "Serializes timestamps as RFC 3339 UTC ending in Z",
+      "Normalizes naive datetimes returned by SQLite as UTC at the API boundary",
+      "Uses the persisted timestamp in POST and GET responses",
+      "Adds a deterministic secondary ordering key for tied timestamps",
+      "Tests timestamp creation, serialization, persisted-response equality, and tied ordering",
+      "Explains that create_all does not migrate an existing deployed timestamp column"
+    ]
+  },
+  {
+    "name": "integrity-error-does-not-leak-or-partially-commit",
+    "prompt": "A duplicate prediction UID now raises a SQLAlchemy IntegrityError halfway through saving detections. Fix the behavior without changing the endpoint's established error response.",
+    "expected_output": "The agent treats the prediction and its detections as one transaction, rolls back on integrity failure, and translates the expected database failure into the established API error contract.",
+    "assertions": [
+      "Keeps session and transaction ownership explicit",
+      "Does not commit the prediction before all related detections are ready",
+      "Calls rollback after IntegrityError",
+      "Does not leave a partial PredictionSession or DetectionObject set",
+      "Does not expose SQLAlchemy exception text or database credentials to the client",
+      "Preserves the established HTTP status and response shape for the failure",
+      "Adds a test that forces IntegrityError and verifies both API behavior and database atomicity"
+    ]
+  }
+]

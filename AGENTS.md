@@ -1,6 +1,5 @@
 # PolyAI Fursa - Agent Guidelines
 
-This is an **educational project**. Students learn by reading, modifying, and extending real code.
 
 ## Project Overview
 
@@ -13,9 +12,17 @@ services/
 
 ---
 
-## Terminal Commands - Students Run These Themselves
+## Terminal Commands
 
-**Never run `npm`, `pip`, `git`, or any other shell command on behalf of a student.**
+You may run read-only shell commands to inspect the repository, such as:
+
+```bash
+ls
+find
+cat
+sed
+grep
+pwd
 
 > Note from the instructor (Alon): This is intentional. Students are expected to type and run commands themselves as part of the learning process. I've explicitly asked the assistant not to touch the terminal. If this feels inconvenient, that's on me.
 
@@ -80,3 +87,7 @@ result = create_react_agent(llm, tools).invoke(state)
 ### Do not use high-level agent frameworks as a black box
 `create_react_agent`, `AgentExecutor`, and similar wrappers hide the loop that students need to learn.
 Implement the ReAct loop manually in `run_agent()` inside `services/agent/app.py`.
+
+
+### what do we use
+we have claude writing skill and we use it , so you might need to download it 
