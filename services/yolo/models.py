@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -6,11 +6,20 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database import Base
 
 
+def utc_now() -> datetime:
+    """Return a timezone-aware timestamp in UTC."""
+    return datetime.now(timezone.utc)
+
+
 class PredictionSession(Base):
     __tablename__ = "prediction_sessions"
 
     uid: Mapped[str] = mapped_column(String, primary_key=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
     original_image: Mapped[str] = mapped_column(String, nullable=False)
     predicted_image: Mapped[str] = mapped_column(String, nullable=False)
 

@@ -8,13 +8,13 @@ from sqlalchemy.pool import StaticPool
 
 os.environ.setdefault("CONFIDENCE_THRESHOLD", "0.5")
 
-import app as app_module
 from app import app
+import database
 from database import Base, get_db
 
 
 @pytest.fixture
-def db_session():
+def db_session(monkeypatch):
     test_database_url = os.environ.get("TEST_DATABASE_URL", "sqlite://")
     engine_options = {}
     if test_database_url.startswith("sqlite"):
@@ -29,22 +29,22 @@ def db_session():
         expire_on_commit=False,
     )
     Base.metadata.create_all(bind=test_engine)
-    session = TestSession()
 
     def override_get_db():
+        session = TestSession()
         try:
             yield session
         finally:
-            pass
+            session.close()
 
     app.dependency_overrides[get_db] = override_get_db
-    original_engine = app_module.engine
-    app_module.engine = test_engine
+    monkeypatch.setattr(database, "engine", test_engine)
+
+    session = TestSession()
 
     yield session
 
     app.dependency_overrides.clear()
-    app_module.engine = original_engine
     session.close()
     Base.metadata.drop_all(bind=test_engine)
     test_engine.dispose()

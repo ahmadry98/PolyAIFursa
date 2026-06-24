@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import Depends, FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -13,7 +15,8 @@ import sys
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from database import Base, engine, get_db
+import database
+from database import get_db
 from repositories import (
     add_prediction,
     find_detections_by_score,
@@ -52,7 +55,7 @@ class PredictionResponse(BaseModel):
 
 @app.on_event("startup")
 def startup_event():
-    Base.metadata.create_all(bind=engine)
+    database.Base.metadata.create_all(bind=database.engine)
 
 
 @app.on_event("shutdown")
@@ -83,6 +86,16 @@ def get_confidence_threshold():
 
     logging.info("CONFIDENCE_THRESHOLD not set, using default: 0.5")
     return 0.5
+
+
+def format_timestamp(timestamp: datetime) -> str:
+    """Serialize a database timestamp as RFC 3339 UTC."""
+    if timestamp.tzinfo is None:
+        # SQLite may return a naive datetime even for DateTime(timezone=True).
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+
+    utc_timestamp = timestamp.astimezone(timezone.utc)
+    return utc_timestamp.isoformat().replace("+00:00", "Z")
 
 
 # Global configuration
@@ -162,7 +175,7 @@ def predict(file: UploadFile = File(...), db: Session = Depends(get_db)):
         )
 
     # Store the session and all of its objects in one transaction.
-    add_prediction(
+    prediction = add_prediction(
         db,
         uid,
         original_path,
@@ -174,7 +187,7 @@ def predict(file: UploadFile = File(...), db: Session = Depends(get_db)):
 
     return PredictionResponse(
     uid=uid,
-    timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    timestamp=format_timestamp(prediction.timestamp),
     original_image=original_path,
     predicted_image=predicted_path,
     detection_objects=detection_objects,
@@ -196,7 +209,7 @@ def get_prediction_by_uid(uid: str, db: Session = Depends(get_db)):
 
     return {
         "uid": prediction.uid,
-        "timestamp": str(prediction.timestamp),
+        "timestamp": format_timestamp(prediction.timestamp),
         "original_image": prediction.original_image,
         "predicted_image": prediction.predicted_image,
         "detection_objects": [
@@ -246,7 +259,7 @@ def get_predictions_by_label(label: str, db: Session = Depends(get_db)):
     return [
         {
             "uid": prediction.uid,
-            "timestamp": str(prediction.timestamp),
+            "timestamp": format_timestamp(prediction.timestamp),
             "detection_objects": [
                 {
                     "id": detection.id,

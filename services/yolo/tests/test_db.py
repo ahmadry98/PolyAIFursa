@@ -1,4 +1,5 @@
 import pytest
+from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
@@ -18,6 +19,25 @@ def test_add_prediction_saves_session_and_detections(db_session):
     assert prediction.uid == "abc-123"
     assert len(prediction.detection_objects) == 1
     assert prediction.detection_objects[0].label == "person"
+
+
+def test_add_prediction_records_current_utc_timestamp(db_session):
+    before = datetime.now(timezone.utc)
+
+    prediction = add_prediction(
+        db_session,
+        "timestamp-test",
+        "original.jpg",
+        "predicted.jpg",
+        [],
+    )
+
+    after = datetime.now(timezone.utc)
+    timestamp = prediction.timestamp
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+
+    assert before <= timestamp <= after
 
 
 def test_add_prediction_rolls_back_after_duplicate_uid(db_session):

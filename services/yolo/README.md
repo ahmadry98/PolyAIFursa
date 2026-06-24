@@ -41,6 +41,16 @@ For PostgreSQL, set `DATABASE_URL` before starting the service. Existing deploye
 databases should be migrated with a schema migration tool; `create_all()` only
 bootstraps new local or test databases.
 
+## Timestamps
+
+`timestamp` is the UTC creation time of a prediction session. API responses use
+RFC 3339 and end in `Z`, for example `2026-06-24T12:34:56.789000Z`. This differs
+from `time_took`, which is the number of seconds spent processing the request.
+
+New ORM rows use timezone-aware UTC values. Existing PostgreSQL databases whose
+column is `timestamp without time zone` need a migration that interprets old
+values as UTC and converts the column to `timestamp with time zone`.
+
 ## Running Tests
 
 The test suite uses `pytest` and FastAPI's built-in test client — no running server needed.

@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
@@ -55,6 +56,10 @@ def test_get_prediction_by_uid_success(client, db_session):
     assert data["uid"] == "abc-123"
     assert data["original_image"] == "uploads/original/abc-123.jpg"
     assert data["predicted_image"] == "uploads/predicted/abc-123.jpg"
+    parsed_timestamp = datetime.fromisoformat(
+        data["timestamp"].replace("Z", "+00:00")
+    )
+    assert parsed_timestamp.tzinfo == timezone.utc
     assert len(data["detection_objects"]) == 1
     assert data["detection_objects"][0]["label"] == "person"
 

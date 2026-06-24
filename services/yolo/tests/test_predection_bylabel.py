@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from models import DetectionObject, PredictionSession
 
 
@@ -33,3 +35,30 @@ def test_empty_label_returns_400(client):
 
     assert response.status_code == 400
     assert response.json() == {"detail": "Label cannot be empty"}
+
+
+def test_label_results_have_deterministic_order_for_tied_timestamps(
+    client,
+    db_session,
+):
+    timestamp = datetime(2026, 6, 24, 12, 0, tzinfo=timezone.utc)
+    for uid in ["prediction-b", "prediction-a"]:
+        prediction = PredictionSession(
+            uid=uid,
+            timestamp=timestamp,
+            original_image=f"{uid}-original.jpg",
+            predicted_image=f"{uid}-predicted.jpg",
+        )
+        prediction.detection_objects.append(
+            DetectionObject(label="person", score=0.8, box="[1, 2, 3, 4]")
+        )
+        db_session.add(prediction)
+    db_session.commit()
+
+    response = client.get("/predictions/label/person")
+
+    assert response.status_code == 200
+    assert [item["uid"] for item in response.json()] == [
+        "prediction-a",
+        "prediction-b",
+    ]
