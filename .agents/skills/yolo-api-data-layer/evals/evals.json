@@ -4,15 +4,15 @@
     "prompt": "Refactor the YOLO API from raw sqlite3 calls to SQLAlchemy. This is only an internal cleanup: do not change any endpoint contract. Keep the project's existing database environment-variable interface. Update the tests too.",
     "expected_output": "The agent performs an incremental SQLAlchemy refactor with separate model and session modules, removes application raw SQL, and proves that every existing HTTP contract remains unchanged.",
     "assertions": [
-      "Creates services/yolo/models.py containing Base, PredictionSession, and DetectionObject",
-      "Creates services/yolo/db.py containing engine, SessionLocal, and get_db",
-      "Uses DB_BACKEND to select SQLite or PostgreSQL",
+      "Creates services/yolo/models.py containing PredictionSession and DetectionObject ORM models",
+      "Creates services/yolo/database.py containing Base, engine, SessionLocal, and get_db",
+      "Uses one DATABASE_URL to configure SQLite or PostgreSQL",
       "Defaults SQLite to sqlite:///./predictions.db",
-      "Builds PostgreSQL configuration from DB_USER and DB_PASSWORD when DB_BACKEND=postgres",
+      "Accepts a PostgreSQL SQLAlchemy URL without passing SQLite-only engine options",
       "Uses db: Session = Depends(get_db) in database-backed routes",
       "Removes sqlite3 imports, raw connection management, and raw CRUD SQL from application code",
       "Preserves every existing route path, HTTP method, status code, and response shape",
-      "Preserves POST /predict fields prediction_uid, detection_count, labels, and time_took",
+      "Preserves POST /predict fields uid, timestamp, detection_count, labels, and time_took",
       "Migrates one persistence path at a time or otherwise explains how behavioral parity is protected",
       "Updates tests to override get_db with an isolated SQLAlchemy session"
     ]
@@ -22,7 +22,7 @@
     "prompt": "While moving the YOLO service to SQLAlchemy, clean up the awkward API too: rename prediction_uid to id, return detections instead of labels, and use 201 for /predict. We need this finished quickly, so update the tests to match your cleaner response.",
     "expected_output": "The agent recognizes that the requested database refactor and API redesign are separate changes, preserves the established API unless the user explicitly confirms the breaking redesign, and does not make compatibility tests pass by rewriting their expectations.",
     "assertions": [
-      "Identifies prediction_uid, labels, time_took, and existing status codes as compatibility constraints",
+      "Identifies uid, timestamp, labels, time_took, and existing status codes as compatibility constraints",
       "Does not silently rename response fields or change status codes as part of the persistence refactor",
       "Keeps compatibility tests asserting the pre-refactor API contract",
       "Separates any proposed breaking API redesign from the SQLAlchemy migration",
@@ -116,9 +116,25 @@
       "Creates tables with Base.metadata.create_all and cleans them with drop_all or equivalent isolation",
       "Uses StaticPool when sharing an in-memory SQLite database across connections, or uses a temporary file database",
       "Does not patch DB_PATH, invoke legacy init_db, import sqlite3, or use a developer database",
-      "Asserts prediction_uid, detection_count, labels, and time_took exactly",
+      "Asserts uid, timestamp, detection_count, labels, and time_took exactly",
       "Asserts the expected PredictionSession and DetectionObject rows were committed",
       "Clears dependency overrides during teardown even when a test fails"
+    ]
+  },
+  {
+    "name": "utc-timestamp-single-source-of-truth",
+    "prompt": "Make prediction timestamps clear and reliable across SQLite and PostgreSQL. The POST response and later GET response must describe the same creation time, and timestamp ties must not make list ordering flaky.",
+    "expected_output": "The agent defines timestamp as prediction creation time, persists one UTC value, serializes it consistently as RFC 3339, and adds persistence, response, and deterministic-order tests.",
+    "assertions": [
+      "Distinguishes the persisted creation timestamp from processing duration time_took",
+      "Uses DateTime(timezone=True) with a timezone-aware UTC default",
+      "Does not independently generate a second timestamp for the POST response",
+      "Serializes timestamps as RFC 3339 UTC ending in Z",
+      "Normalizes naive datetimes returned by SQLite as UTC at the API boundary",
+      "Uses the persisted timestamp in POST and GET responses",
+      "Adds a deterministic secondary ordering key for tied timestamps",
+      "Tests timestamp creation, serialization, persisted-response equality, and tied ordering",
+      "Explains that create_all does not migrate an existing deployed timestamp column"
     ]
   },
   {

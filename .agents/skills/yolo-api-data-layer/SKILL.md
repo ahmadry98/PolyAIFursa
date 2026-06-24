@@ -1,118 +1,114 @@
 ---
 name: yolo-api-data-layer
-description: Use when changing persistence, database models, queries, API schemas, or database-backed tests in the YOLO FastAPI service, especially for SQLAlchemy, SQLite, or PostgreSQL work.
+description: Refactor or extend persistence, SQLAlchemy models, repositories, transactions, timestamps, database configuration, API schemas, and database-backed tests in the YOLO FastAPI service. Use for SQLite or PostgreSQL changes under services/yolo.
 ---
 
-# Evolving the YOLO Data Layer
+# Evolve the YOLO Data Layer
 
-## Overview
+Treat persistence work as an API-preserving migration. Keep the code explicit enough for students to trace a request from the FastAPI route through the repository and transaction.
 
-Treat a database change as an API-preserving migration, not a storage rewrite. Keep HTTP behavior stable while moving persistence behind explicit SQLAlchemy models, sessions, and repository-style functions.
+## Preserve the Project Contract
 
-## Invariants
+Keep these entities unless the user explicitly changes the domain:
 
-- Preserve routes, methods, status codes, JSON field names, field types, defaults, and ordering unless the task explicitly changes the API.
-- Keep image bytes and base64 out of the LLM path. Detection remains the YOLO service's responsibility.
-- Support both SQLite and PostgreSQL through one configurable `DATABASE_URL`.
-- Keep request/response schemas separate from ORM models.
-- Never use database-specific SQL when SQLAlchemy can express the operation portably.
-- A request owns a short-lived session; tests own isolated databases.
+- `PredictionSession`: `uid`, `timestamp`, `original_image`, `predicted_image`
+- `DetectionObject`: `id`, `prediction_uid`, `label`, `score`, `box`
 
-## Workflow
+Preserve routes, methods, status codes, response field names and types, defaults, errors, and observable ordering. Inventory all routes before editing, including `/health`, `/predict`, `/prediction/{uid}`, image retrieval, label and score searches, and `/metrics`.
 
-1. **Inventory the contract.** Read the FastAPI routes, Pydantic schemas, raw SQL, table creation, startup lifecycle, configuration, and tests. Record existing endpoint behavior before editing.
-2. **Characterize behavior.** Add or identify API tests that lock down responses, errors, ordering, and persistence. These tests are the migration safety net.
-3. **Introduce infrastructure.** Add a database module containing the URL, engine, session factory, declarative base, and FastAPI session dependency. Do not change route behavior yet.
-4. **Map the existing schema.** Create typed ORM models with explicit table names, columns, nullability, defaults, primary keys, foreign keys, relationships, and indexes. Match existing SQLite data semantics.
-5. **Replace one query path at a time.** Move SQL into small data-access functions. Routes validate input and translate results; data-access functions query and persist.
-6. **Preserve transaction boundaries.** Commit once per successful write operation, roll back on failure, and refresh objects only when generated values are required.
-7. **Verify both backends.** Run the normal SQLite suite and the PostgreSQL integration suite. A SQLite-only pass does not prove portability.
-8. **Remove legacy code last.** Delete raw connections, SQL strings, and duplicate schema initialization only after equivalent tests pass.
+Keep request/response Pydantic schemas separate from ORM models. Keep image bytes out of the agent/LLM path.
 
-## Core Pattern
+## Use Explicit Layers
 
-```python
-# database.py
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./yolo.db")
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+Keep responsibilities visible:
 
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-Base = declarative_base()
+1. `database.py`: `DATABASE_URL`, dialect-aware engine options, session factory, declarative base, and `get_db`.
+2. `models.py`: typed ORM models, constraints, relationships, indexes, and defaults.
+3. `repositories.py`: small SQLAlchemy queries and write operations.
+4. `app.py`: validation, service orchestration, transaction-error translation, and response formatting.
+5. `tests/`: isolated engines and FastAPI dependency overrides.
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-```
+Inject a short-lived `Session` with `Depends(get_db)` into every database-backed route. Never open raw connections in routes. Keep each write operation atomic: commit once when all related rows are ready, roll back on failure, and refresh only when generated values are needed.
 
-Inject `Session` with `Depends(get_db)`. In tests, override `get_db`; do not patch global connections or point tests at a developer database.
+## Timestamp Contract
 
-## Portability Rules
+Treat `timestamp` as the prediction session's creation time. It is distinct from `time_took`, which is the request's processing duration.
 
-| Concern | Portable choice |
+- Generate the timestamp once when the ORM object is created; do not independently generate a response timestamp.
+- Store UTC with `DateTime(timezone=True)` and a timezone-aware Python default.
+- Serialize API timestamps as RFC 3339 UTC, ending in `Z`, for example `2026-06-24T12:34:56.789000Z`.
+- Normalize values at the API boundary because SQLite may return a naive `datetime` even when `timezone=True`; interpret such persisted values as UTC.
+- Use the persisted timestamp in both create and read responses.
+- Order time-based queries explicitly. Add a stable secondary key such as `uid` or `id` because timestamps can tie.
+- Preserve old rows through a migration strategy when changing an existing timestamp column. Do not claim `create_all()` migrates deployed schemas.
+
+Test timestamp creation, UTC serialization, equality between the create response and persisted value, read-response formatting, newest-first ordering, and tied timestamps.
+
+## Maintain SQLite and PostgreSQL Portability
+
+Use one configurable `DATABASE_URL`, defaulting to `sqlite:///./predictions.db`. Apply `check_same_thread=False` only to SQLite. Never pass SQLite engine options to PostgreSQL.
+
+Prefer SQLAlchemy expressions and portable types. Avoid SQLite date functions, `INSERT OR REPLACE`, string-built SQL, SQLite boolean encodings, and implicit row ordering.
+
+Use `create_all()` only for fresh local bootstrap and test databases. Use migrations for deployed schema evolution. A passing SQLite suite does not prove PostgreSQL compatibility; run a disposable PostgreSQL suite or report it as unverified.
+
+## Follow This Workflow
+
+1. Inspect routes, schemas, models, repositories, startup behavior, configuration, requirements, and every `services/yolo/tests/test*.py` file.
+2. Record the observable HTTP and persistence contract before editing.
+3. Add or strengthen black-box compatibility tests.
+4. Introduce or modify database infrastructure without changing route behavior.
+5. Map schema details explicitly: table names, types, nullability, defaults, keys, relationships, cascades, and indexes.
+6. Replace or update one repository path at a time.
+7. Verify atomic writes, rollback, deterministic ordering, and session cleanup.
+8. Remove legacy helpers and raw SQL only after tests no longer depend on them.
+9. Verify SQLite and PostgreSQL when available, and report exactly what ran.
+
+## Build Isolated Tests
+
+Create a fresh engine and session factory for tests. Override `get_db` through `app.dependency_overrides`; never patch a raw connection or point tests at a developer database. Use `StaticPool` for shared in-memory SQLite, or use a temporary file.
+
+Mock external boundaries such as the YOLO model, not repositories or ORM behavior, when testing `/predict`. Assert both the HTTP response and committed rows.
+
+Cover:
+
+- Exact success responses and established errors.
+- Missing records and invalid values.
+- Duplicate/conflicting data and rollback without partial rows.
+- Session/test isolation and dependency-override cleanup.
+- Deterministic ordering, including equal sort values.
+- Timestamp persistence and RFC 3339 UTC output.
+- SQLite behavior and disposable PostgreSQL integration when available.
+
+Do not restore `init_db`, `save_prediction_session`, or `save_detection_object` merely to satisfy stale tests. Seed ORM models or call repository functions with the isolated test session. Inspect oddly named duplicate test files before finishing.
+
+## Avoid Common Failures
+
+| Failure | Correction |
 |---|---|
-| Primary keys | SQLAlchemy integer identity/autoincrement |
-| Timestamps | Explicit timezone policy and SQLAlchemy types |
-| Booleans/JSON | SQLAlchemy `Boolean`/`JSON`, not SQLite encodings |
-| SQL parameters | ORM expressions or `text()` with named parameters |
-| SQLite threads | `check_same_thread=False` only for SQLite |
-| Engine options | Branch by URL/dialect; never pass SQLite options to PostgreSQL |
-| Schema changes | Migrations for deployed data; `create_all()` only for bootstrap/tests |
+| ORM objects accidentally define the API | Keep explicit Pydantic response schemas and format ORM data at the boundary |
+| One global request session | Yield and close one session per request |
+| Multiple commits inside one logical write | Commit once after the complete object graph is ready |
+| Database exception leaks to clients | Roll back and translate expected failures to the established API error |
+| Response time differs from stored time | Serialize the persisted ORM timestamp |
+| SQLite timestamp lacks `tzinfo` | Normalize it to UTC before API serialization |
+| Query relies on insertion order | Add explicit primary and tie-break ordering |
+| `create_all()` is called a migration | Provide a real non-destructive migration strategy |
+| Tests mock repositories | Mock YOLO and other external boundaries; exercise the real data layer |
+| Old copied tests still import legacy helpers | Inspect every test file and migrate or remove stale duplicates |
 
-Do not infer production readiness from SQLite: it tolerates type and concurrency behavior PostgreSQL rejects. Avoid `INSERT OR REPLACE`, implicit row ordering, SQLite date functions, and string-built SQL.
+## Completion Gate
 
-## Adding a Database-Backed Feature
+Before reporting completion, confirm:
 
-Define the contract in this order:
+- Routes contain no raw SQL or connection management.
+- API compatibility is asserted rather than assumed.
+- Sessions close and failed writes roll back.
+- Timestamps have one documented UTC meaning and format.
+- SQLite and PostgreSQL receive only compatible engine options.
+- Tests override `get_db`, isolate data, and exercise real repositories.
+- Deployed schema changes have a migration strategy.
+- Every test file collects without legacy-helper imports.
+- Exact test commands and backend dialects are reported; unavailable PostgreSQL coverage is named as a risk.
 
-1. API schema and observable behavior.
-2. ORM model and database constraints.
-3. Data-access functions with typed inputs and explicit return values.
-4. Route/service integration through session injection.
-5. API tests plus persistence and rollback tests.
-6. Migration when an existing deployed schema changes.
-
-Database constraints protect invariants; API validation produces friendly errors. Use both where appropriate. Convert expected integrity failures into the established API error shape rather than leaking SQLAlchemy exceptions.
-
-## Test Contract
-
-Tests must cover:
-
-- Existing routes before and after the refactor, including exact response shape and status codes.
-- Successful create/read/update/delete behavior that the service exposes.
-- Missing records, invalid input, duplicate/conflicting data, and rollback after failed writes.
-- Session isolation: one test cannot observe another test's data.
-- Deterministic ordering using explicit `order_by` when order is observable.
-- SQLite for fast tests and PostgreSQL for dialect/integration confidence.
-
-Build a fresh engine/session factory for the test database, create the schema, override the FastAPI dependency, and tear the schema down. For in-memory SQLite shared across connections, use `StaticPool`; otherwise prefer a temporary file database. PostgreSQL tests must use a dedicated disposable database or schema.
-
-## Common Mistakes
-
-| Mistake | Correction |
-|---|---|
-| ORM objects become response schemas accidentally | Keep Pydantic schemas explicit and enable attribute-based validation deliberately |
-| One global session | Inject one session per request |
-| `create_all()` presented as migration support | Use a migration tool for deployed schema evolution |
-| Commit hidden in many helpers | Make the write transaction boundary obvious |
-| Tests replace API assertions with ORM assertions | Retain black-box API compatibility tests |
-| Queries rely on insertion order | Add explicit ordering |
-| PostgreSQL URL receives SQLite arguments | Choose engine options by dialect |
-| Legacy SQL removed before equivalence is proven | Migrate incrementally, then delete it |
-
-## Completion Checklist
-
-- [ ] API compatibility is demonstrated by tests.
-- [ ] Routes contain no raw SQL or connection management.
-- [ ] Sessions close reliably and failed writes roll back.
-- [ ] Configuration accepts SQLite and PostgreSQL URLs.
-- [ ] Queries, types, defaults, and ordering are portable.
-- [ ] Tests override the session dependency and isolate data.
-- [ ] Both backend suites pass, or an unavailable backend is reported explicitly.
-- [ ] Deployed schema changes include a migration strategy.
-- [ ] Legacy persistence code is removed only after parity is proven.
-
-Do not claim completion from code inspection alone. Report the exact tests run, backend URLs by dialect only (never credentials), and any unverified compatibility risk.
+Do not claim completion from inspection alone.
