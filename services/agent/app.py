@@ -71,6 +71,26 @@ TOOLS = {
 }
 
 llm = init_chat_model(MODEL, temperature=0)
+MODEL_PROFILE = llm.profile or {}
+
+if not MODEL_PROFILE.get("tool_calling"):
+    raise SystemExit(
+        f"[ERROR] MODEL='{MODEL}' does not support tool calling."
+    )
+
+if not MODEL_PROFILE.get("structured_output"):
+    raise SystemExit(
+        f"[ERROR] MODEL='{MODEL}' does not support structured output."
+    )
+
+MAX_INPUT_TOKENS = MODEL_PROFILE.get("max_input_tokens")
+
+if MAX_INPUT_TOKENS is None:
+    logging.warning(
+        "Model profile does not expose max_input_tokens; context limit checks will be skipped."
+    )
+else:
+    logging.info(f"Model max_input_tokens: {MAX_INPUT_TOKENS}")
 llm_with_tools = llm.bind_tools(list(TOOLS.values()))
 class TokenUsage(BaseModel):
     input: int = 0
@@ -92,6 +112,7 @@ def run_agent(history: list, max_iterations: int = 10):
     tools_called = []
     iterations = 0
     tokens_used = TokenUsage()
+    context_limit_exceeded = False
     for iteration in range(max_iterations):
         iterations = iteration + 1
         response: AIMessage = llm_with_tools.invoke(messages)
@@ -103,6 +124,10 @@ def run_agent(history: list, max_iterations: int = 10):
         output=usage.get("output_tokens", 0),
         total=usage.get("total_tokens", 0),
         )
+        context_limit_exceeded = (
+            MAX_INPUT_TOKENS is not None
+            and tokens_used.input > MAX_INPUT_TOKENS * 0.9
+        )
         if not response.tool_calls:
             return {
                 "response": response.content,
@@ -112,7 +137,7 @@ def run_agent(history: list, max_iterations: int = 10):
                 "agent_loop_time_s": round(time.time() - start_time, 2),
                 "iterations": iterations,
                 "tools_called": tools_called,
-                "context_limit_exceeded": False,
+                "context_limit_exceeded": context_limit_exceeded,
                 "tokens_used": tokens_used,
             }
 
