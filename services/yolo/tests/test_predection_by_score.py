@@ -1,65 +1,49 @@
-import unittest
-import tempfile
-from fastapi.testclient import TestClient
-
-import app as app_module
-from app import app, init_db, save_prediction_session, save_detection_object
+from models import DetectionObject, PredictionSession
 
 
-class TestPredictionsByScore(unittest.TestCase):
-    def setUp(self):
-        # Use a temporary database for each test
-        _, app_module.DB_PATH = tempfile.mkstemp(suffix=".db")
-        init_db()
+def test_returns_objects_with_score_greater_than_or_equal_to_min_score(
+    client,
+    db_session,
+):
+    prediction = PredictionSession(
+        uid="abc-123",
+        original_image="uploads/original/abc-123.jpg",
+        predicted_image="uploads/predicted/abc-123.jpg",
+    )
+    prediction.detection_objects = [
+        DetectionObject(label="person", score=0.91, box="[10, 20, 100, 200]"),
+        DetectionObject(label="car", score=0.40, box="[30, 40, 150, 250]"),
+    ]
+    db_session.add(prediction)
+    db_session.commit()
 
-        # Create FastAPI test client
-        self.client = TestClient(app)
+    response = client.get("/predictions/score/0.5")
 
-    def test_returns_objects_with_score_greater_than_or_equal_to_min_score(self):
-        # Create one high-score object and one low-score object
-        save_prediction_session(
-            "abc-123",
-            "uploads/original/abc-123.jpg",
-            "uploads/predicted/abc-123.jpg"
-        )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["prediction_uid"] == "abc-123"
+    assert data[0]["label"] == "person"
+    assert data[0]["score"] == 0.91
 
-        save_detection_object("abc-123", "person", 0.91, [10, 20, 100, 200])
-        save_detection_object("abc-123", "car", 0.40, [30, 40, 150, 250])
+def test_returns_empty_list_when_no_scores_match(client):
+    response = client.get("/predictions/score/0.9")
 
-        response = self.client.get("/predictions/score/0.5")
+    assert response.status_code == 200
+    assert response.json() == []
 
-        self.assertEqual(response.status_code, 200)
+def test_min_score_below_zero_returns_400(client):
+    response = client.get("/predictions/score/-0.1")
 
-        data = response.json()
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "min_score must be between 0.0 and 1.0"
+    }
 
-        self.assertEqual(len(data), 1)
-        self.assertEqual(data[0]["prediction_uid"], "abc-123")
-        self.assertEqual(data[0]["label"], "person")
-        self.assertEqual(data[0]["score"], 0.91)
+def test_min_score_above_one_returns_400(client):
+    response = client.get("/predictions/score/1.1")
 
-    def test_returns_empty_list_when_no_scores_match(self):
-        # Verify empty result when no object reaches the minimum score
-        response = self.client.get("/predictions/score/0.9")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), [])
-
-    def test_min_score_below_zero_returns_400(self):
-        # Verify invalid score below 0 is rejected
-        response = self.client.get("/predictions/score/-0.1")
-
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(
-            response.json(),
-            {"detail": "min_score must be between 0.0 and 1.0"}
-        )
-
-    def test_min_score_above_one_returns_400(self):
-        # Verify invalid score above 1 is rejected
-        response = self.client.get("/predictions/score/1.1")
-
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(
-            response.json(),
-            {"detail": "min_score must be between 0.0 and 1.0"}
-        )
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "min_score must be between 0.0 and 1.0"
+    }

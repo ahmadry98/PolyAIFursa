@@ -1,51 +1,64 @@
-import unittest
-import tempfile
-from fastapi.testclient import TestClient
+from datetime import datetime, timezone
 
-import app as app_module
-from app import app, init_db, save_prediction_session, save_detection_object
+from models import DetectionObject, PredictionSession
 
 
-class TestPredictionsByLabel(unittest.TestCase):
-    def setUp(self):
-        # Use a temporary database for each test
-        _, app_module.DB_PATH = tempfile.mkstemp(suffix=".db")
-        init_db()
+def test_returns_predictions_with_given_label(client, db_session):
+    prediction = PredictionSession(
+        uid="abc-123",
+        original_image="uploads/original/abc-123.jpg",
+        predicted_image="uploads/predicted/abc-123.jpg",
+    )
+    prediction.detection_objects.append(
+        DetectionObject(label="person", score=0.91, box="[10, 20, 100, 200]")
+    )
+    db_session.add(prediction)
+    db_session.commit()
 
-        # Create FastAPI test client
-        self.client = TestClient(app)
+    response = client.get("/predictions/label/person")
 
-    def test_returns_predictions_with_given_label(self):
-        # Create a prediction with one detected label
-        save_prediction_session(
-            "abc-123",
-            "uploads/original/abc-123.jpg",
-            "uploads/predicted/abc-123.jpg"
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["uid"] == "abc-123"
+    assert data[0]["detection_objects"][0]["label"] == "person"
+    assert data[0]["detection_objects"][0]["score"] == 0.91
+
+def test_returns_empty_list_when_no_label_matches(client):
+    response = client.get("/predictions/label/car")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+def test_empty_label_returns_400(client):
+    response = client.get("/predictions/label/")
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Label cannot be empty"}
+
+
+def test_label_results_have_deterministic_order_for_tied_timestamps(
+    client,
+    db_session,
+):
+    timestamp = datetime(2026, 6, 24, 12, 0, tzinfo=timezone.utc)
+    for uid in ["prediction-b", "prediction-a"]:
+        prediction = PredictionSession(
+            uid=uid,
+            timestamp=timestamp,
+            original_image=f"{uid}-original.jpg",
+            predicted_image=f"{uid}-predicted.jpg",
         )
+        prediction.detection_objects.append(
+            DetectionObject(label="person", score=0.8, box="[1, 2, 3, 4]")
+        )
+        db_session.add(prediction)
+    db_session.commit()
 
-        save_detection_object("abc-123", "person", 0.91, [10, 20, 100, 200])
+    response = client.get("/predictions/label/person")
 
-        response = self.client.get("/predictions/label/person")
-
-        self.assertEqual(response.status_code, 200)
-
-        data = response.json()
-
-        self.assertEqual(len(data), 1)
-        self.assertEqual(data[0]["uid"], "abc-123")
-        self.assertEqual(data[0]["detection_objects"][0]["label"], "person")
-        self.assertEqual(data[0]["detection_objects"][0]["score"], 0.91)
-
-    def test_returns_empty_list_when_no_label_matches(self):
-        # Verify empty result when no prediction contains the label
-        response = self.client.get("/predictions/label/car")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), [])
-
-    def test_empty_label_returns_400(self):
-        # Verify empty label URL returns bad request
-        response = self.client.get("/predictions/label/")
-
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json(), {"detail": "Label cannot be empty"})
+    assert response.status_code == 200
+    assert [item["uid"] for item in response.json()] == [
+        "prediction-a",
+        "prediction-b",
+    ]

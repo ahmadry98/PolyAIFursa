@@ -87,3 +87,7 @@ result = create_react_agent(llm, tools).invoke(state)
 ### Do not use high-level agent frameworks as a black box
 `create_react_agent`, `AgentExecutor`, and similar wrappers hide the loop that students need to learn.
 Implement the ReAct loop manually in `run_agent()` inside `services/agent/app.py`.
+
+
+### what do we use
+we have claude writing skill and we use it , so you might need to download it 
