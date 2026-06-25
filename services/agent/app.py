@@ -80,10 +80,17 @@ rate_limiter = InMemoryRateLimiter(
 )
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 llm = init_chat_model(
-    MODEL,
+
+    MODEL.replace("bedrock/", ""),
+
+    model_provider="bedrock_converse",
+
     temperature=0,
+
     rate_limiter=rate_limiter,
+
     region_name=AWS_REGION,
+
 )
 MODEL_PROFILE = llm.profile or {}
 
