@@ -4,6 +4,8 @@ import json
 import logging
 import time
 import os
+import uuid
+from s3_utils import upload_bytes_to_s3
 from contextvars import ContextVar
 from typing import Optional
 
@@ -60,12 +62,31 @@ def detect_objects() -> str:
         return json.dumps({"error": "No image was provided by the user."})
 
     image_bytes = base64.b64decode(image_b64)
-    with httpx.Client(timeout=30.0) as client:
+
+    chat_id = str(uuid.uuid4())
+    prediction_id = str(uuid.uuid4())
+    image_name = "image.jpg"
+
+    original_key = f"{chat_id}/{prediction_id}/original/{image_name}"
+
+    upload_bytes_to_s3(
+        data=image_bytes,
+        key=original_key,
+        content_type="image/jpeg",
+    )
+
+    with httpx.Client(timeout=60.0) as client:
         response = client.post(
             f"{YOLO_SERVICE_URL}/predict",
-            files={"file": ("image.jpg", io.BytesIO(image_bytes), "image/jpeg")},
+            json={
+                "image_s3_key": original_key,
+                "chat_id": chat_id,
+                "prediction_id": prediction_id,
+                "image_name": image_name,
+            },
         )
         response.raise_for_status()
+
     return json.dumps(response.json())
 
 
@@ -195,15 +216,7 @@ def run_agent(history: list, max_iterations: int = 10):
                     )
 
                 if predicted_image_path:
-                    image_path = (
-                        f"/home/ubuntu/PolyAIFursa/services/yolo/"
-                        f"{predicted_image_path}"
-                    )
-
-                    with open(image_path, "rb") as image_file:
-                        annotated_image = base64.b64encode(
-                            image_file.read()
-                        ).decode("utf-8")
+                    annotated_image_url = predicted_image_path
 
             except Exception:
                 logging.exception(

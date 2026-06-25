@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, UploadFile, File, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 from ultralytics import YOLO
@@ -11,6 +11,7 @@ import uuid
 import shutil
 import time
 import signal
+from s3_utils import download_bytes_from_s3, upload_file_to_s3
 import sys
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -52,7 +53,12 @@ class PredictionResponse(BaseModel):
     labels: list[str]
     time_took: float
 
-
+class PredictRequest(BaseModel):
+    image_s3_key: str
+    chat_id: str | None = None
+    prediction_id: str | None = None
+    image_name: str = "image.jpg"
+    
 @app.on_event("startup")
 def startup_event():
     database.Base.metadata.create_all(bind=database.engine)
@@ -112,20 +118,18 @@ model = YOLO("yolov8n.pt")
 
 
 @app.post("/predict", response_model=PredictionResponse)
-def predict(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def predict(request: PredictRequest, db: Session = Depends(get_db)):
     """
     Upload an image, run YOLO object detection, save the result,
     and return prediction details.
     """
     start_time = time.time()
 
-    # Extract file extension, for example: .jpg or .png
-    ext = os.path.splitext(file.filename)[1]
-    # Generate unique ID for this prediction
-    uid = str(uuid.uuid4())
-
-    # Only allow image files
     allowed_extensions = [".jpg", ".jpeg", ".png"]
+
+    image_name = request.image_name or "image.jpg"
+    ext = os.path.splitext(image_name)[1] or ".jpg"
+    uid = request.prediction_id or str(uuid.uuid4())
 
     if ext not in allowed_extensions:
         raise HTTPException(
@@ -133,14 +137,15 @@ def predict(file: UploadFile = File(...), db: Session = Depends(get_db)):
             detail="Only image files are supported"
         )
 
-    # Build paths for original and predicted images
     original_path = os.path.join(UPLOAD_DIR, uid + ext)
     predicted_path = os.path.join(PREDICTED_DIR, uid + ext)
 
-    # Save uploaded image to disk
-    with open(original_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    image_bytes = download_bytes_from_s3(request.image_s3_key)
 
+    with open(original_path, "wb") as f:
+        f.write(image_bytes)
+
+    original_image_value = request.image_s3_key
     # Run YOLO prediction on CPU
     results = model(original_path, device="cpu", conf=CONFIDENCE_THRESHOLD)
 
@@ -148,6 +153,9 @@ def predict(file: UploadFile = File(...), db: Session = Depends(get_db)):
     annotated_frame = results[0].plot()
     annotated_image = Image.fromarray(annotated_frame)
     annotated_image.save(predicted_path)
+    predicted_key = f"{request.chat_id or 'default-chat'}/{uid}/predicted/{image_name}"
+    upload_file_to_s3(predicted_path, predicted_key)
+    predicted_image_value = predicted_key
 
     detected_labels = []
     detection_objects = []
@@ -188,8 +196,8 @@ def predict(file: UploadFile = File(...), db: Session = Depends(get_db)):
     return PredictionResponse(
     uid=uid,
     timestamp=format_timestamp(prediction.timestamp),
-    original_image=original_path,
-    predicted_image=predicted_path,
+    original_image=original_image_value,
+    predicted_image=predicted_image_value,
     detection_objects=detection_objects,
     detection_count=len(detection_objects),
     labels=detected_labels,
