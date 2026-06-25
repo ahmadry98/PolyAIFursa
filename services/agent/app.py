@@ -150,8 +150,21 @@ def run_agent(history: list, max_iterations: int = 10):
             and tokens_used.input > MAX_INPUT_TOKENS * 0.9
         )
         if not response.tool_calls:
+            content = response.content
+
+            if isinstance(content, list):
+
+                content = "\n".join(
+
+                part.get("text", "")
+
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+
             return {
-                "response": response.content,
+
+                "response": content,
                 "prediction_id": prediction_id,
                 "annotated_image": annotated_image,
                 "annotated_image_url": annotated_image_url,
