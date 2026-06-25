@@ -31,10 +31,13 @@ MODEL = os.environ.get("MODEL")
 
 # Text-only models
 ALLOWED_MODELS = {
-    "openai:gpt-5.4-mini",
-    "anthropic:claude-haiku-4-5",
+    "bedrock/openai.gpt-oss-20b-1:0",
+    "bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+    "bedrock/amazon.nova-micro-v1:0",
+    "bedrock/amazon.nova-lite-v1:0",
+    "bedrock/meta.llama3-1-8b-instruct-v1:0",
+    "bedrock/mistral.mistral-7b-instruct-v0:2",
 }
-
 if MODEL not in ALLOWED_MODELS:
     allowed_list = "\n  ".join(sorted(ALLOWED_MODELS))
     raise SystemExit(
@@ -75,10 +78,12 @@ rate_limiter = InMemoryRateLimiter(
     check_every_n_seconds=0.1,
     max_bucket_size=5,
 )
+AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 llm = init_chat_model(
     MODEL,
     temperature=0,
     rate_limiter=rate_limiter,
+    region_name=AWS_REGION,
 )
 MODEL_PROFILE = llm.profile or {}
 
