@@ -3,8 +3,7 @@ from unittest.mock import patch
 
 
 def test_predict_with_s3_key(client):
-    image_bytes = Path("services/yolo/beatles.jpeg").read_bytes()
-
+    image_bytes = (Path(__file__).resolve().parents[1] / "beatles.jpeg").read_bytes()
     with patch("app.download_bytes_from_s3", return_value=image_bytes), \
          patch("app.upload_file_to_s3", return_value="chat-1/pred-1/predicted/image.jpg"):
 
