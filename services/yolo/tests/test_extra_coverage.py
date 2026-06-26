@@ -26,7 +26,7 @@ def add_prediction(db_session, uid, predicted_image):
 
 def test_predict_rejects_non_image_file(client):
     response = client.post(
-        "/predict",
+        "/predict/upload",
         files={"file": ("test.txt", b"hello", "text/plain")},
     )
 

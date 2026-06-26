@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 from ultralytics import YOLO
@@ -203,7 +203,82 @@ def predict(request: PredictRequest, db: Session = Depends(get_db)):
     labels=detected_labels,
     time_took=processing_time,
 )
+@app.post("/predict/upload", response_model=PredictionResponse)
+def predict_upload(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """
+    Backward-compatible file upload endpoint for tests/manual uploads.
+    Main /predict endpoint uses S3 object keys.
+    """
+    start_time = time.time()
 
+    ext = os.path.splitext(file.filename)[1]
+    uid = str(uuid.uuid4())
+
+    allowed_extensions = [".jpg", ".jpeg", ".png"]
+    if ext not in allowed_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail="Only image files are supported"
+        )
+
+    original_path = os.path.join(UPLOAD_DIR, uid + ext)
+    predicted_path = os.path.join(PREDICTED_DIR, uid + ext)
+
+    with open(original_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    results = model(original_path, device="cpu", conf=CONFIDENCE_THRESHOLD)
+
+    annotated_frame = results[0].plot()
+    annotated_image = Image.fromarray(annotated_frame)
+    annotated_image.save(predicted_path)
+
+    detected_labels = []
+    detection_objects = []
+    detections_to_save = []
+
+    for box in results[0].boxes:
+        label_idx = int(box.cls[0].item())
+        label = model.names[label_idx]
+        score = float(box.conf[0])
+        bbox = box.xyxy[0].tolist()
+
+        detected_labels.append(label)
+        detections_to_save.append({
+            "label": label,
+            "score": score,
+            "box": bbox,
+        })
+
+        detection_objects.append(
+            DetectionObjectResponse(
+                id=len(detection_objects),
+                label=label,
+                score=score,
+                box=bbox,
+            )
+        )
+
+    prediction = add_prediction(
+        db,
+        uid,
+        original_path,
+        predicted_path,
+        detections_to_save,
+    )
+
+    processing_time = round(time.time() - start_time, 2)
+
+    return PredictionResponse(
+        uid=uid,
+        timestamp=format_timestamp(prediction.timestamp),
+        original_image=original_path,
+        predicted_image=predicted_path,
+        detection_objects=detection_objects,
+        detection_count=len(detection_objects),
+        labels=detected_labels,
+        time_took=processing_time,
+    )
 
 @app.get("/prediction/{uid}")
 def get_prediction_by_uid(uid: str, db: Session = Depends(get_db)):
@@ -317,14 +392,6 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/health2")
-def health2():
-    """
-    Health2 check endpoint.
-    Used to verify that the API is running.
-    """
-    return {"status": "ok"}
- 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
 
