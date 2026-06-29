@@ -74,9 +74,9 @@ TOOLS = {
     detect_objects.name: detect_objects
 }
 rate_limiter = InMemoryRateLimiter(
-    requests_per_second=1,
+    requests_per_second=5,
     check_every_n_seconds=0.1,
-    max_bucket_size=5,
+    max_bucket_size=10,
 )
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 llm = init_chat_model(
