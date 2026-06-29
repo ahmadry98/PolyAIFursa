@@ -31,10 +31,13 @@ MODEL = os.environ.get("MODEL")
 
 # Text-only models
 ALLOWED_MODELS = {
-    "openai:gpt-5.4-mini",
-    "anthropic:claude-haiku-4-5",
+    "bedrock/openai.gpt-oss-20b-1:0",
+    "bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+    "bedrock/amazon.nova-micro-v1:0",
+    "bedrock/amazon.nova-lite-v1:0",
+    "bedrock/meta.llama3-1-8b-instruct-v1:0",
+    "bedrock/mistral.mistral-7b-instruct-v0:2",
 }
-
 if MODEL not in ALLOWED_MODELS:
     allowed_list = "\n  ".join(sorted(ALLOWED_MODELS))
     raise SystemExit(
@@ -71,14 +74,23 @@ TOOLS = {
     detect_objects.name: detect_objects
 }
 rate_limiter = InMemoryRateLimiter(
-    requests_per_second=1,
+    requests_per_second=5,
     check_every_n_seconds=0.1,
-    max_bucket_size=5,
+    max_bucket_size=10,
 )
+AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 llm = init_chat_model(
-    MODEL,
+
+    MODEL.replace("bedrock/", ""),
+
+    model_provider="bedrock_converse",
+
     temperature=0,
+
     rate_limiter=rate_limiter,
+
+    region_name=AWS_REGION,
+
 )
 MODEL_PROFILE = llm.profile or {}
 
@@ -138,8 +150,21 @@ def run_agent(history: list, max_iterations: int = 10):
             and tokens_used.input > MAX_INPUT_TOKENS * 0.9
         )
         if not response.tool_calls:
+            content = response.content
+
+            if isinstance(content, list):
+
+                content = "\n".join(
+
+                part.get("text", "")
+
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+
             return {
-                "response": response.content,
+
+                "response": content,
                 "prediction_id": prediction_id,
                 "annotated_image": annotated_image,
                 "annotated_image_url": annotated_image_url,
