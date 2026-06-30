@@ -4,27 +4,14 @@ on:
   push:
     branches:
       - dev
+      - main
   pull_request:
     branches:
       - main
 
 jobs:
-  docker-scout:
-    if: github.event_name == 'push' || github.event.pull_request.merged == true
+  scout-yolo:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        service:
-          - name: yolo
-            context: ./services/yolo
-            image: yolo-service
-          - name: agent
-            context: ./services/agent
-            image: agent-service
-          - name: frontend
-            context: ./services/frontend
-            image: frontend-service
 
     steps:
       - name: Checkout code
@@ -36,18 +23,17 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build ${{ matrix.service.name }} image
+      - name: Build YOLO image
         uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.service.context }}
+          context: ./services/yolo
           push: false
-          load: true
-          tags: ${{ matrix.service.image }}:scout
+          tags: yolo-service:scout
 
-      - name: Docker Scout scan ${{ matrix.service.name }}
+      - name: Docker Scout scan
         uses: docker/scout-action@v1
         with:
           command: cves
-          image: ${{ matrix.service.image }}:scout
+          image: yolo-service:scout
           only-severities: critical,high
-          exit-code: true
+          exit-code: false

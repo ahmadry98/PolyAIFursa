@@ -1,4 +1,4 @@
-FROM python:3.12-slim-trixie
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -17,7 +17,6 @@ COPY torch-requirements.txt requirements.txt ./
 RUN pip install --upgrade pip \
     && pip install -r torch-requirements.txt \
     && pip install -r requirements.txt \
-    && pip install --upgrade "setuptools>=78.1.1" \
     && addgroup --system app \
     && adduser --system --ingroup app app
 
