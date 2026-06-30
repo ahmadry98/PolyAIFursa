@@ -10,8 +10,21 @@ on:
       - main
 
 jobs:
-  scout-yolo:
+  docker-scout:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - name: yolo
+            context: ./services/yolo
+            image: yolo-service
+          - name: agent
+            context: ./services/agent
+            image: agent-service
+          - name: frontend
+            context: ./services/frontend
+            image: frontend-service
 
     steps:
       - name: Checkout code
@@ -23,17 +36,18 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build YOLO image
+      - name: Build ${{ matrix.service.name }} image
         uses: docker/build-push-action@v6
         with:
-          context: ./services/yolo
+          context: ${{ matrix.service.context }}
           push: false
-          tags: yolo-service:scout
+          load: true
+          tags: ${{ matrix.service.image }}:scout
 
-      - name: Docker Scout scan
+      - name: Docker Scout scan ${{ matrix.service.name }}
         uses: docker/scout-action@v1
         with:
           command: cves
-          image: yolo-service:scout
+          image: ${{ matrix.service.image }}:scout
           only-severities: critical,high
           exit-code: false
