@@ -3,7 +3,7 @@ services:
     build:
       context: ./services/frontend
       args:
-        NEXT_PUBLIC_AGENT_URL: "${NEXT_PUBLIC_AGENT_URL:-http://localhost:8000}"
+        NEXT_PUBLIC_AGENT_URL: http://localhost:8000
     ports:
       - "3000:3000"
     depends_on:
@@ -18,7 +18,12 @@ services:
       - ./services/agent/.env
     environment:
       YOLO_SERVICE_URL: http://yolo:8080
-      AWS_REGION: "${AWS_REGION:-us-east-1}"
+      AWS_PROFILE: default
+      AWS_REGION: us-east-1
+      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
+      AWS_CONFIG_FILE: /aws/config
+    volumes:
+      - ${HOME}/.aws:/aws:ro
     ports:
       - "8000:8000"
     depends_on:
@@ -32,7 +37,14 @@ services:
     env_file:
       - ./services/agent/.env
     environment:
-      AWS_REGION: "${AWS_REGION:-us-east-1}"
+      AWS_PROFILE: default
+      AWS_REGION: us-east-1
+      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
+      AWS_CONFIG_FILE: /aws/config
+    volumes:
+      - ${HOME}/.aws:/aws:ro
+    ports:
+      - "8080:8080"
     networks:
       - polyai-net
 
