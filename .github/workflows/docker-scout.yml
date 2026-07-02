@@ -7,8 +7,6 @@ on:
   pull_request:
     branches:
       - main
-    types:
-      - closed
 
 jobs:
   docker-scout:
@@ -52,4 +50,4 @@ jobs:
           command: cves
           image: ${{ matrix.service.image }}:scout
           only-severities: critical,high
-          exit-code: false
+          exit-code: true
