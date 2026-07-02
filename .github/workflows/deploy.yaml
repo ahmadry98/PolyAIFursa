@@ -47,10 +47,25 @@ jobs:
             git fetch origin
             git reset --hard origin/main
 
-            docker compose config
-            docker compose build
+            sudo cp deploy/systemd/*.service /etc/systemd/system/
+            sudo systemctl daemon-reload
 
-            sudo systemctl disable --now yolo agent frontend || true
+            cd /home/ubuntu/PolyAIFursa/services/yolo
+            source .venv/bin/activate
+            pip install -r requirements.txt
+            python -c "import app; app.init_db()"
 
-            docker compose up -d --remove-orphans
-            docker compose ps
+            cd /home/ubuntu/PolyAIFursa/services/agent
+            source .venv/bin/activate
+            pip install -r requirements.txt
+
+            cd /home/ubuntu/PolyAIFursa/services/frontend
+            npm install
+            npm run build
+
+            sudo systemctl enable yolo agent frontend
+            sudo systemctl restart yolo agent frontend
+
+            sudo systemctl status yolo --no-pager
+            sudo systemctl status agent --no-pager
+            sudo systemctl status frontend --no-pager
