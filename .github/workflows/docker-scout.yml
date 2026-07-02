@@ -50,4 +50,5 @@ jobs:
           command: cves
           image: ${{ matrix.service.image }}:scout
           only-severities: critical,high
+          only-fixed: true
           exit-code: true
