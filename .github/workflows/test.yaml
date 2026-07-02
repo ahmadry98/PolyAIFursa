@@ -3,15 +3,16 @@ name: Run Tests
 on:
   push:
     branches:
-      - main
       - dev
-      - "**"
   pull_request:
     branches:
       - main
+    types:
+      - closed
 
 jobs:
   test-yolo:
+    if: github.event_name == 'push' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
     steps:
@@ -39,6 +40,7 @@ jobs:
           files: services/yolo/coverage.xml
 
   test-agent:
+    if: github.event_name == 'push' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
     defaults:
