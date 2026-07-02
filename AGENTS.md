@@ -10,23 +10,6 @@ services/
   yolo/     ← YOLO object-detection microservice (FastAPI + Ultralytics)
 ```
 
----
-
-## Terminal Commands
-
-You may run read-only shell commands to inspect the repository, such as:
-
-```bash
-ls
-find
-cat
-sed
-grep
-pwd
-
-> Note from the instructor (Alon): This is intentional. Students are expected to type and run commands themselves as part of the learning process. I've explicitly asked the assistant not to touch the terminal. If this feels inconvenient, that's on me.
-
-Instead, show the exact command and explain what it does:
 
 **Do this:**
 > Run this in your terminal inside `services/agent/`:
