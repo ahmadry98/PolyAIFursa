@@ -25,6 +25,12 @@ export default function Chat() {
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!["image/jpeg", "image/png"].includes(file.type)) {
+      toast.error("Please choose a JPEG or PNG image.");
+      e.target.value = "";
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result as string;
@@ -61,7 +67,7 @@ export default function Chat() {
 
     try {
       const reply = await sendMessage(next);
-      setMessages([...next, { role: "assistant", content: reply }]);
+      setMessages([...next, reply]);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -134,7 +140,7 @@ export default function Chat() {
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            accept="image/jpeg,image/png"
             className="hidden"
             onChange={handleFileChange}
           />

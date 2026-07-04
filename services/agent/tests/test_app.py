@@ -1,6 +1,7 @@
 
 import app
 from fastapi.testclient import TestClient
+from langchain_core.messages import HumanMessage
 
 
 client = TestClient(app.app)
@@ -14,7 +15,11 @@ def test_health():
 
 
 def test_chat_api_mocks_run_agent(monkeypatch):
+    captured = {}
+
     def fake_run_agent(history, max_iterations=10):
+        captured["history"] = history
+        captured["image"] = app._current_image_b64.get()
         return {
             "response": "Mocked response",
             "prediction_id": "test-prediction-id",
@@ -40,6 +45,7 @@ def test_chat_api_mocks_run_agent(monkeypatch):
                 {
                     "role": "user",
                     "content": "hello",
+                    "image_base64": "aW1hZ2UtYnl0ZXM=",
                 }
             ]
         },
@@ -53,3 +59,7 @@ def test_chat_api_mocks_run_agent(monkeypatch):
     assert data["iterations"] == 1
     assert data["tools_called"] == []
     assert data["tokens_used"]["total"] == 15
+    assert captured["image"] == "aW1hZ2UtYnl0ZXM="
+    assert isinstance(captured["history"][0], HumanMessage)
+    assert "aW1hZ2UtYnl0ZXM=" not in captured["history"][0].content
+    assert app._current_image_b64.get() is None

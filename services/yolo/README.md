@@ -30,6 +30,8 @@ You can test the api endpoints using `curl` or Postman. See the API Endpoints se
 | `CONFIDENCE_THRESHOLD` | `0.5` | Minimum confidence score (0.0–1.0) for a detection to be reported. Raise it to get only high-confidence results; lower it to catch more objects. |
 | `DATABASE_URL` | `sqlite:///./predictions.db` | SQLAlchemy database URL. Use SQLite locally or a PostgreSQL URL in deployment. |
 | `TEST_DATABASE_URL` | `sqlite://` | Optional disposable database used by tests. |
+| `AWS_REGION` | `us-east-1` | AWS region containing the shared image bucket. |
+| `AWS_S3_BUCKET` | `test-bucket` | Bucket shared by the agent and YOLO services. |
 
 Example:
 ```bash
@@ -66,7 +68,7 @@ and drops its tables, so never point it at a development or production database.
 
 ## API Endpoints
 
-* `POST /predict` - Upload an image for object detection
+* `POST /predict` - Upload an image for object detection. The agent can instead pass an optional `image_s3_key` query parameter.
 * `GET /prediction/{uid}` - Get details of a specific prediction by ID
 * `GET /predictions/label/{label}` - Get all predictions containing a specific object label (e.g., "person", "car")
 * `GET /predictions/score/{min_score}` - Get predictions with confidence score above threshold (e.g., 0.5)
@@ -82,7 +84,13 @@ You can use tools like curl, Postman, or a web browser to test the endpoints. Fo
 curl -X POST -F "file=@your_image.jpg" http://localhost:8080/predict
 ```
 
-2. View detection results (replace {uid} with the ID returned from the upload):
+2. Run a prediction for an image already uploaded by the agent:
+```bash
+curl -X POST \
+  "http://localhost:8080/predict?image_s3_key=chat-id%2Fprediction-id%2Foriginal%2Fimage.jpg"
+```
+
+3. View detection results (replace {uid} with the ID returned from the upload):
 ```bash
 curl http://localhost:8080/prediction/{uid}
 ```

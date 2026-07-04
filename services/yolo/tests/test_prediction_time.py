@@ -31,7 +31,7 @@ def post_mock_prediction(client, tmp_path):
         patch("app.PREDICTED_DIR", str(predicted_dir)),
     ):
         return client.post(
-            "/predict/upload",
+            "/predict",
             files={"file": ("image.jpeg", b"fake image", "image/jpeg")},
         )
 
