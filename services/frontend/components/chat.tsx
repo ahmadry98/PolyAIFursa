@@ -149,7 +149,7 @@ export default function Chat() {
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            accept="image/jpeg,image/png"
             className="hidden"
             onChange={handleFileChange}
           />

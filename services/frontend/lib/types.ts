@@ -4,4 +4,5 @@ export interface ChatMessage {
   image_base64?: string;
   annotated_image?: string | null;
   annotated_image_url?: string | null;
+  image_url?: string | null;
 }

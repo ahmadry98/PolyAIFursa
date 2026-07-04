@@ -55,12 +55,6 @@ class PredictionResponse(BaseModel):
     detection_count: int
     labels: list[str]
     time_took: float
-
-class PredictRequest(BaseModel):
-    image_s3_key: str
-    chat_id: str | None = None
-    prediction_id: str | None = None
-    image_name: str = "image.jpg"
     
 @app.on_event("startup")
 def startup_event():
@@ -251,108 +245,6 @@ def predict(
         time_took=processing_time,
     )
 
-def predict(
-    db: Session = Depends(get_db),
-    image_s3_key: str | None = None,
-    file: UploadFile | None = File(default=None),
-):
-    """
-    Run object detection from either the original multipart upload or an S3 key.
-
-    The optional image_s3_key query parameter is used by the agent. Multipart
-    uploads keep the original /predict API contract.
-    """
-    start_time = time.time()
-    if image_s3_key is None and file is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Provide an image file or image_s3_key",
-        )
-
-    if image_s3_key is not None and file is not None:
-        raise HTTPException(
-            status_code=400,
-            detail="Provide either an image file or image_s3_key, not both",
-        )
-
-    if image_s3_key is not None:
-        key_parts = image_s3_key.split("/")
-        if len(key_parts) != 4 or key_parts[2] != "original":
-            raise HTTPException(
-                status_code=400,
-                detail="image_s3_key must use chat/prediction/original/filename",
-            )
-
-        chat_id = key_parts[0]
-        uid = key_parts[1]
-        image_name = key_parts[3]
-    else:
-        assert file is not None
-        chat_id = None
-        uid = str(uuid.uuid4())
-        image_name = file.filename or ""
-
-    ext = os.path.splitext(image_name)[1].lower()
-    if image_s3_key is not None:
-        image_bytes = download_bytes_from_s3(image_s3_key)
-        with open(original_path, "wb") as image_file:
-            image_file.write(image_bytes)
-        original_image_value = image_s3_key
-    else:
-        with open(original_path, "wb") as image_file:
-            image_file.write(file.file.read())
-        original_image_value = original_path
-    # Run YOLO prediction on CPU
-    results = model(original_path, device="cpu", conf=CONFIDENCE_THRESHOLD)
-    # Create annotated image with bounding boxes
-    annotated_frame = results[0].plot()
-    annotated_image = Image.fromarray(annotated_frame)
-    annotated_image.save(predicted_path)
-
-    if image_s3_key is not None:
-        predicted_key = f"{chat_id}/{uid}/predicted/{image_name}"
-        content_type = "image/png" if ext == ".png" else "image/jpeg"
-        upload_file_to_s3(predicted_path, predicted_key, content_type)
-        predicted_image_value = predicted_key
-    else:
-        predicted_image_value = predicted_path
-        detected_labels.append(label)
-        detections_to_save.append(
-            {
-                "label": label,
-                "score": score,
-                "box": bbox,
-            }
-        )
-        detection_objects.append(
-            DetectionObjectResponse(
-                id=len(detection_objects),
-                label=label,
-                score=score,
-                box=bbox,
-            )
-        )
-    # Store the session and all of its objects in one transaction.
-    prediction = add_prediction(
-        db,
-        uid,
-        original_image_value,
-        predicted_image_value,
-        detections_to_save,
-    )
-    # Calculate total processing time
-    processing_time = round(time.time() - start_time, 2)
-    return PredictionResponse(
-        uid=uid,
-        timestamp=format_timestamp(prediction.timestamp),
-        original_image=original_image_value,
-        predicted_image=predicted_image_value,
-        detection_objects=detection_objects,
-        detection_count=len(detection_objects),
-        labels=detected_labels,
-        time_took=processing_time,
-    )
-
 
 @app.get("/prediction/{uid}")
 def get_prediction_by_uid(uid: str, db: Session = Depends(get_db)):
@@ -387,10 +279,11 @@ def get_prediction_image(uid: str, db: Session = Depends(get_db)):
     Return the annotated image for a prediction.
     """
     prediction = find_prediction(db, uid)
-    if prediction is None or not os.path.exists(prediction.predicted_image):
+    if prediction is None:
         raise HTTPException(status_code=404, detail="Image not found")
 
-    return FileResponse(prediction.predicted_image)
+    if os.path.exists(prediction.predicted_image):
+        return FileResponse(prediction.predicted_image)
 
     key_parts = prediction.predicted_image.split("/")
     if len(key_parts) != 4 or key_parts[2] != "predicted":

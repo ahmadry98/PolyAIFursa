@@ -13,7 +13,8 @@ services:
 
   agent:
     build:
-      context: ./services/agent
+      context: .
+      dockerfile: services/agent/Dockerfile
     env_file:
       - ./services/agent/.env
     environment:
