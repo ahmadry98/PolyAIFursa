@@ -62,9 +62,7 @@ def test_run_agent_calls_tool_and_returns_final_answer(monkeypatch):
 
     assert result["response"] == "I found 2 people in the image."
     assert result["prediction_id"] == "prediction-123"
-    assert result["annotated_image_url"] == (
-        "http://localhost:8080/prediction/prediction-123/image"
-    )
+    assert result["annotated_image_url"] == "/prediction/prediction-123/image"
     assert result["iterations"] == 2
     assert result["tools_called"] == ["detect_objects"]
     assert result["tokens_used"].total == 28

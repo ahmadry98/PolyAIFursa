@@ -1,14 +1,18 @@
 import base64
-import io
+import binascii
 import json
 import logging
 import time
 import os
+import re
+import uuid
 from contextvars import ContextVar
 from typing import Optional
 
 from dotenv import load_dotenv
 load_dotenv()
+
+from s3_utils import upload_bytes_to_s3
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,10 +22,11 @@ logging.getLogger("langchain").setLevel(logging.DEBUG)
 logging.getLogger("langchain_core").setLevel(logging.DEBUG)
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 from langchain_core.rate_limiters import InMemoryRateLimiter
 from pydantic import BaseModel
@@ -38,19 +43,18 @@ ALLOWED_MODELS = {
     "bedrock/meta.llama3-1-8b-instruct-v1:0",
     "bedrock/mistral.mistral-7b-instruct-v0:2",
 }
-if MODEL not in ALLOWED_MODELS:
-    allowed_list = "\n  ".join(sorted(ALLOWED_MODELS))
-    raise SystemExit(
-        f"\n[ERROR] MODEL='{MODEL}' is not allowed.\n"
-        f"Set MODEL in your .env to one of the supported text-only models:\n  {allowed_list}\n"
-    )
-
 SYSTEM_PROMPT = (
     "You are an AI vision assistant. You help users understand and analyze images. "
-    "Use the available tools to extract information from images. "
+    "When the user uploads an image, call detect_objects before answering. "
+    "Use the tool result to answer the user's question. "
+    "Report object counts exactly as provided in label_counts. "
 )
 
-_current_image_b64: ContextVar[Optional[str]] = ContextVar("current_image_b64", default=None)
+_current_image_b64: ContextVar[Optional[str]] = ContextVar(
+    "current_image_b64",
+    default=None,
+)
+
 
 @tool
 def detect_objects() -> str:
@@ -59,14 +63,58 @@ def detect_objects() -> str:
     if not image_b64:
         return json.dumps({"error": "No image was provided by the user."})
 
-    image_bytes = base64.b64decode(image_b64)
-    with httpx.Client(timeout=30.0) as client:
-        response = client.post(
-            f"{YOLO_SERVICE_URL}/predict",
-            files={"file": ("image.jpg", io.BytesIO(image_bytes), "image/jpeg")},
+    try:
+        image_bytes = base64.b64decode(image_b64, validate=True)
+    except (binascii.Error, ValueError, TypeError):
+        return json.dumps({"error": "The uploaded image is not valid base64 data."})
+
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        image_name = "image.jpg"
+        content_type = "image/jpeg"
+    elif image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        image_name = "image.png"
+        content_type = "image/png"
+    else:
+        return json.dumps({"error": "Only JPEG and PNG images are supported."})
+
+    chat_id = str(uuid.uuid4())
+    prediction_id = str(uuid.uuid4())
+
+    original_key = f"{chat_id}/{prediction_id}/original/{image_name}"
+
+    try:
+        upload_bytes_to_s3(
+            data=image_bytes,
+            key=original_key,
+            content_type=content_type,
         )
-        response.raise_for_status()
-    return json.dumps(response.json())
+
+        with httpx.Client(timeout=60.0) as client:
+            response = client.post(
+                f"{YOLO_SERVICE_URL}/predict",
+                params={"image_s3_key": original_key},
+            )
+            response.raise_for_status()
+    except Exception:
+        logging.exception("Object detection request failed")
+        return json.dumps(
+            {"error": "The object detection service could not process the image."}
+        )
+
+    result = response.json()
+    labels = result.get("labels", [])
+    label_counts = {}
+    for label in labels:
+        label_counts[label] = label_counts.get(label, 0) + 1
+
+    return json.dumps(
+        {
+            "uid": result.get("uid"),
+            "detection_count": result.get("detection_count", len(labels)),
+            "labels": labels,
+            "label_counts": label_counts,
+        }
+    )
 
 
 # Registry: map tool name -> tool function
@@ -79,45 +127,65 @@ rate_limiter = InMemoryRateLimiter(
     max_bucket_size=10,
 )
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
-llm = init_chat_model(
+llm_with_tools = None
+MAX_INPUT_TOKENS = None
 
-    MODEL.replace("bedrock/", ""),
 
-    model_provider="bedrock_converse",
+def get_llm_with_tools():
+    """Create the Bedrock model on first use so imports and tests stay offline."""
+    global llm_with_tools, MAX_INPUT_TOKENS
 
-    temperature=0,
+    if llm_with_tools is not None:
+        return llm_with_tools
 
-    rate_limiter=rate_limiter,
+    if MODEL not in ALLOWED_MODELS:
+        allowed_list = "\n  ".join(sorted(ALLOWED_MODELS))
+        raise RuntimeError(
+            f"MODEL='{MODEL}' is not allowed. Set MODEL to one of:\n  {allowed_list}"
+        )
 
-    region_name=AWS_REGION,
+    model_options = {}
+    if MODEL.startswith("bedrock/openai."):
+        model_options["additional_model_request_fields"] = {
+            "reasoning_effort": "low"
+        }
 
-)
-MODEL_PROFILE = llm.profile or {}
-
-if not MODEL_PROFILE.get("tool_calling"):
-    raise SystemExit(
-        f"[ERROR] MODEL='{MODEL}' does not support tool calling."
+    llm = init_chat_model(
+        MODEL.replace("bedrock/", ""),
+        model_provider="bedrock_converse",
+        temperature=0,
+        max_tokens=1024,
+        timeout=60,
+        max_retries=1,
+        rate_limiter=rate_limiter,
+        region_name=AWS_REGION,
+        **model_options,
     )
+    model_profile = llm.profile or {}
 
-if not MODEL_PROFILE.get("structured_output"):
-    raise SystemExit(
-        f"[ERROR] MODEL='{MODEL}' does not support structured output."
-    )
+    if not model_profile.get("tool_calling"):
+        raise RuntimeError(f"MODEL='{MODEL}' does not support tool calling.")
 
-MAX_INPUT_TOKENS = MODEL_PROFILE.get("max_input_tokens")
+    MAX_INPUT_TOKENS = model_profile.get("max_input_tokens")
+    if MAX_INPUT_TOKENS is None:
+        logging.warning(
+            "Model profile does not expose max_input_tokens; "
+            "context limit checks will be skipped."
+        )
+    else:
+        logging.info("Model max_input_tokens: %s", MAX_INPUT_TOKENS)
 
-if MAX_INPUT_TOKENS is None:
-    logging.warning(
-        "Model profile does not expose max_input_tokens; context limit checks will be skipped."
-    )
-else:
-    logging.info(f"Model max_input_tokens: {MAX_INPUT_TOKENS}")
-llm_with_tools = llm.bind_tools(list(TOOLS.values()))
+    llm_with_tools = llm.bind_tools(list(TOOLS.values()))
+    return llm_with_tools
+
+
 class TokenUsage(BaseModel):
     input: int = 0
     output: int = 0
     total: int = 0
-def run_agent(history: list, max_iterations: int = 10):    
+
+
+def run_agent(history: list, max_iterations: int = 10):
     """
     Simple ReAct loop with max_iterations guard.
     Returns:
@@ -134,16 +202,18 @@ def run_agent(history: list, max_iterations: int = 10):
     iterations = 0
     tokens_used = TokenUsage()
     context_limit_exceeded = False
+    model = get_llm_with_tools()
+
     for iteration in range(max_iterations):
         iterations = iteration + 1
-        response: AIMessage = llm_with_tools.invoke(messages)
+        response: AIMessage = model.invoke(messages)
         messages.append(response)
         usage = response.usage_metadata or {}
 
         tokens_used = TokenUsage(
-        input=usage.get("input_tokens", 0),
-        output=usage.get("output_tokens", 0),
-        total=usage.get("total_tokens", 0),
+            input=usage.get("input_tokens", 0),
+            output=usage.get("output_tokens", 0),
+            total=usage.get("total_tokens", 0),
         )
         context_limit_exceeded = (
             MAX_INPUT_TOKENS is not None
@@ -153,17 +223,20 @@ def run_agent(history: list, max_iterations: int = 10):
             content = response.content
 
             if isinstance(content, list):
-
                 content = "\n".join(
+                    part.get("text", "")
+                    for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
+                )
 
-                part.get("text", "")
-
-                for part in content
-                if isinstance(part, dict) and part.get("type") == "text"
+            content = re.sub(
+                r"<thinking>.*?</thinking>\s*",
+                "",
+                content,
+                flags=re.DOTALL,
             )
 
             return {
-
                 "response": content,
                 "prediction_id": prediction_id,
                 "annotated_image": annotated_image,
@@ -186,24 +259,9 @@ def run_agent(history: list, max_iterations: int = 10):
                 data = json.loads(tool_result.content)
 
                 uid = data.get("uid") or data.get("prediction_uid")
-                predicted_image_path = data.get("predicted_image")
-
                 if uid:
                     prediction_id = uid
-                    annotated_image_url = (
-                        f"{YOLO_SERVICE_URL}/prediction/{uid}/image"
-                    )
-
-                if predicted_image_path:
-                    image_path = (
-                        f"/home/ubuntu/PolyAIFursa/services/yolo/"
-                        f"{predicted_image_path}"
-                    )
-
-                    with open(image_path, "rb") as image_file:
-                        annotated_image = base64.b64encode(
-                            image_file.read()
-                        ).decode("utf-8")
+                    annotated_image_url = f"/prediction/{uid}/image"
 
             except Exception:
                 logging.exception(
@@ -212,22 +270,25 @@ def run_agent(history: list, max_iterations: int = 10):
 
 
     return {
-    "response": "The agent stopped because it reached the maximum number of iterations.",
-    "prediction_id": prediction_id,
-    "annotated_image": annotated_image,
-    "annotated_image_url": annotated_image_url,
-    "agent_loop_time_s": round(time.time() - start_time, 2),
-    "iterations": iterations,
-    "tools_called": tools_called,
-    "context_limit_exceeded": True,
-    "tokens_used": tokens_used,
-}
+        "response": "The agent stopped because it reached the maximum number of iterations.",
+        "prediction_id": prediction_id,
+        "annotated_image": annotated_image,
+        "annotated_image_url": annotated_image_url,
+        "agent_loop_time_s": round(time.time() - start_time, 2),
+        "iterations": iterations,
+        "tools_called": tools_called,
+        "context_limit_exceeded": True,
+        "tokens_used": tokens_used,
+    }
+
 
 app = FastAPI(title="Vision Agent")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
         "http://32.197.155.17:3000",
         "http://dev.ahmad.fursa.click:3000",
         "http://67.202.49.42:3000",
@@ -240,16 +301,13 @@ app.add_middleware(
 
 
 class ChatMessage(BaseModel):
-    role: str                           # "user" or "assistant"
+    role: str  # "user" or "assistant"
     content: str
-    image_base64: Optional[str] = None  # only on user messages that carry an image
+    image_base64: Optional[str] = None
 
 
 class ChatRequest(BaseModel):
-    messages: list[ChatMessage]         # full conversation thread, oldest first
-
-
-
+    messages: list[ChatMessage]
 
 
 class ChatResponse(BaseModel):
@@ -263,6 +321,7 @@ class ChatResponse(BaseModel):
     context_limit_exceeded: bool = False
     tokens_used: TokenUsage
 
+
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
     lc_messages = []
@@ -271,8 +330,12 @@ def chat(request: ChatRequest):
     for msg in request.messages:
         if msg.role == "user":
             if msg.image_base64:
-                latest_image = msg.image_base64          # saved for detect_objects tool
-                content = msg.content + "\n[An image was uploaded. Use existing tools to analyze it according to user instructions.]"
+                latest_image = msg.image_base64
+                content = (
+                    msg.content
+                    + "\n[An image was uploaded. Use existing tools to analyze "
+                    "it according to user instructions.]"
+                )
             else:
                 content = msg.content
             lc_messages.append(HumanMessage(content=content))
@@ -285,6 +348,30 @@ def chat(request: ChatRequest):
         return ChatResponse(**result)
     finally:
         _current_image_b64.reset(token)
+
+
+@app.get("/prediction/{uid}/image")
+def get_prediction_image(uid: str):
+    """Proxy the annotated image from the internal YOLO service."""
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(f"{YOLO_SERVICE_URL}/prediction/{uid}/image")
+    except httpx.RequestError as error:
+        raise HTTPException(
+            status_code=502,
+            detail="The object detection service is unavailable.",
+        ) from error
+
+    if response.status_code == 404:
+        raise HTTPException(status_code=404, detail="Image not found")
+    if response.is_error:
+        raise HTTPException(
+            status_code=502,
+            detail="The object detection service could not return the image.",
+        )
+
+    content_type = response.headers.get("content-type", "image/jpeg")
+    return Response(content=response.content, media_type=content_type)
 
 
 @app.get("/health")

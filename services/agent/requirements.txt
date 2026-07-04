@@ -13,3 +13,5 @@ langchain[google-genai]
 
 httpx
 pydantic
+boto3
+pytest

@@ -6,6 +6,9 @@ After=network.target yolo.service
 User=ubuntu
 WorkingDirectory=/home/ubuntu/PolyAIFursa/services/agent
 EnvironmentFile=/home/ubuntu/PolyAIFursa/services/agent/.env
+Environment="AWS_REGION=us-east-1"
+Environment="AWS_S3_BUCKET=ahmad-polyai-images"
+Environment="YOLO_SERVICE_URL=http://localhost:8080"
 ExecStart=/home/ubuntu/PolyAIFursa/services/agent/.venv/bin/python app.py
 Restart=always
 
