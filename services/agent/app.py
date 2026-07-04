@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 import base64
 import binascii
 import json
@@ -6,11 +8,14 @@ import time
 import os
 import re
 import uuid
+import asyncio
+from pathlib import Path
+from typing import Any
+from s3_utils import upload_bytes_to_s3
 from contextvars import ContextVar
 from typing import Optional
 
-from dotenv import load_dotenv
-load_dotenv()
+
 
 from s3_utils import upload_bytes_to_s3
 
@@ -29,9 +34,17 @@ from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 from langchain_core.rate_limiters import InMemoryRateLimiter
+from PIL import Image
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 from pydantic import BaseModel
 
 YOLO_SERVICE_URL = os.environ.get("YOLO_SERVICE_URL", "http://localhost:8080")
+IMG_PROC_MCP_SCRIPT = os.environ.get(
+    "IMG_PROC_MCP_SCRIPT",
+    str(Path(__file__).resolve().parents[1] / "img-proc-mcp" / "img_proc_app.py"),
+
+)
 MODEL = os.environ.get("MODEL")
 
 # Text-only models
@@ -43,83 +56,353 @@ ALLOWED_MODELS = {
     "bedrock/meta.llama3-1-8b-instruct-v1:0",
     "bedrock/mistral.mistral-7b-instruct-v0:2",
 }
+if MODEL not in ALLOWED_MODELS:
+    allowed_list = "\n  ".join(sorted(ALLOWED_MODELS))
+    raise SystemExit(
+        f"\n[ERROR] MODEL='{MODEL}' is not allowed.\n"
+        f"Set MODEL in your .env to one of the supported text-only models:\n  {allowed_list}\n"
+    )
+
 SYSTEM_PROMPT = (
-    "You are an AI vision assistant. You help users understand and analyze images. "
-    "When the user uploads an image, call detect_objects before answering. "
-    "Use the tool result to answer the user's question. "
-    "Report object counts exactly as provided in label_counts. "
+    "You are an AI vision assistant. "
+    "You help users understand, analyze, and edit images. "
+    "Use the available tools whenever needed. "
+    "For requests that ask what is in an image, identify objects, count objects, "
+    "or locate objects, use the object detection tool. "
+    "For requests that ask to rotate, flip, blur, resize, crop, or add noise to an image, "
+    "use the appropriate image-processing tool. "
+    "When an image-processing tool returns an image, do not include the base64 string "
+    "or markdown image syntax in your response. "
+    "Reply with one short sentence describing what you did. "
+    "The frontend will display the processed image automatically."
 )
 
-_current_image_b64: ContextVar[Optional[str]] = ContextVar(
-    "current_image_b64",
-    default=None,
-)
-
+_current_image_b64: ContextVar[Optional[str]] = ContextVar("current_image_b64", default=None)
 
 @tool
 def detect_objects() -> str:
     """Detect and identify objects in the image provided by the user using YOLO object detection."""
+    print(">>> detect_objects called")
     image_b64 = _current_image_b64.get()
     if not image_b64:
         return json.dumps({"error": "No image was provided by the user."})
 
-    try:
-        image_bytes = base64.b64decode(image_b64, validate=True)
-    except (binascii.Error, ValueError, TypeError):
-        return json.dumps({"error": "The uploaded image is not valid base64 data."})
-
-    if image_bytes.startswith(b"\xff\xd8\xff"):
-        image_name = "image.jpg"
-        content_type = "image/jpeg"
-    elif image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
-        image_name = "image.png"
-        content_type = "image/png"
-    else:
-        return json.dumps({"error": "Only JPEG and PNG images are supported."})
+    image_bytes = base64.b64decode(image_b64)
 
     chat_id = str(uuid.uuid4())
     prediction_id = str(uuid.uuid4())
+    image_name = "image.jpg"
 
     original_key = f"{chat_id}/{prediction_id}/original/{image_name}"
 
-    try:
-        upload_bytes_to_s3(
-            data=image_bytes,
-            key=original_key,
-            content_type=content_type,
-        )
-
-        with httpx.Client(timeout=60.0) as client:
-            response = client.post(
-                f"{YOLO_SERVICE_URL}/predict",
-                params={"image_s3_key": original_key},
-            )
-            response.raise_for_status()
-    except Exception:
-        logging.exception("Object detection request failed")
-        return json.dumps(
-            {"error": "The object detection service could not process the image."}
-        )
-
-    result = response.json()
-    labels = result.get("labels", [])
-    label_counts = {}
-    for label in labels:
-        label_counts[label] = label_counts.get(label, 0) + 1
-
-    return json.dumps(
-        {
-            "uid": result.get("uid"),
-            "detection_count": result.get("detection_count", len(labels)),
-            "labels": labels,
-            "label_counts": label_counts,
-        }
+    upload_bytes_to_s3(
+        data=image_bytes,
+        key=original_key,
+        content_type="image/jpeg",
     )
 
+    with httpx.Client(timeout=60.0) as client:
+        response = client.post(
+            f"{YOLO_SERVICE_URL}/predict",
+            json={
+                "image_s3_key": original_key,
+                "chat_id": chat_id,
+                "prediction_id": prediction_id,
+                "image_name": image_name,
+            },
+        )
+        response.raise_for_status()
 
+    return json.dumps(response.json())
+async def _call_img_proc_mcp(tool_name: str, arguments: dict[str, Any]) -> str:
+    server_params = StdioServerParameters(
+        command="python",
+        args=[IMG_PROC_MCP_SCRIPT],
+    )
+
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(tool_name, arguments)
+
+    if not result.content:
+        return ""
+
+    first_content = result.content[0]
+    return getattr(first_content, "text", str(first_content))
+
+
+def _run_img_proc_mcp(tool_name: str, arguments: dict[str, Any]) -> str:
+    return asyncio.run(_call_img_proc_mcp(tool_name, arguments))
+
+def _decode_image(image_b64: str) -> Image.Image:
+    return Image.open(io.BytesIO(base64.b64decode(image_b64))).convert("RGB")
+
+
+def _encode_image(img: Image.Image) -> str:
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def _crop_region(image_b64: str, box: list[float]) -> tuple[Image.Image, tuple[int, int, int, int]]:
+    img = _decode_image(image_b64)
+
+    left, top, right, bottom = [int(v) for v in box]
+    left = max(0, left)
+    top = max(0, top)
+    right = min(img.width, right)
+    bottom = min(img.height, bottom)
+
+    cropped = img.crop((left, top, right, bottom))
+    return cropped, (left, top, right, bottom)
+
+
+def _paste_region(original_b64: str, region_b64: str, box: tuple[int, int, int, int]) -> str:
+    original = _decode_image(original_b64)
+    region = _decode_image(region_b64)
+
+    left, top, right, bottom = box
+    region = region.resize((right - left, bottom - top))
+
+    original.paste(region, (left, top))
+    return _encode_image(original)
+
+@tool
+def rotate_image(angle: float) -> str:
+    """Rotate the uploaded image by angle degrees. Returns JSON with image_base64."""
+    image_b64 = _current_image_b64.get()
+    if not image_b64:
+        return json.dumps({"error": "No image was provided by the user."})
+
+    processed = _run_img_proc_mcp(
+        "rotate",
+        {
+            "image_b64": image_b64,
+            "angle": angle,
+        },
+    )
+
+    return json.dumps({
+        "operation": "rotate",
+        "image_base64": processed,
+    })
+@tool
+def flip_image(direction: str) -> str:
+    """Flip the uploaded image. direction must be horizontal or vertical. Returns JSON with image_base64."""
+    image_b64 = _current_image_b64.get()
+    if not image_b64:
+        return json.dumps({"error": "No image was provided by the user."})
+
+    processed = _run_img_proc_mcp(
+        "flip",
+        {
+            "image_b64": image_b64,
+            "direction": direction,
+        },
+    )
+
+    return json.dumps({
+        "operation": "flip",
+        "image_base64": processed,
+    })
+
+
+@tool
+def blur_image(radius: float = 2.0) -> str:
+    """Blur the uploaded image. Returns JSON with image_base64."""
+    image_b64 = _current_image_b64.get()
+    if not image_b64:
+        return json.dumps({"error": "No image was provided by the user."})
+
+    processed = _run_img_proc_mcp(
+        "blur",
+        {
+            "image_b64": image_b64,
+            "radius": radius,
+        },
+    )
+
+    return json.dumps({
+        "operation": "blur",
+        "image_base64": processed,
+    })
+@tool
+def resize_image(width: int, height: int) -> str:
+    """Resize the uploaded image to width x height. Returns JSON with image_base64."""
+    image_b64 = _current_image_b64.get()
+    if not image_b64:
+        return json.dumps({"error": "No image was provided by the user."})
+
+    processed = _run_img_proc_mcp(
+        "resize",
+        {
+            "image_b64": image_b64,
+            "width": width,
+            "height": height,
+        },
+    )
+
+    return json.dumps({
+        "operation": "resize",
+        "image_base64": processed,
+    })
+@tool
+def crop_image(left: int, top: int, right: int, bottom: int) -> str:
+    """Crop the uploaded image using bounding box coordinates. Returns JSON with image_base64."""
+    image_b64 = _current_image_b64.get()
+    if not image_b64:
+        return json.dumps({"error": "No image was provided by the user."})
+
+    processed = _run_img_proc_mcp(
+        "crop",
+        {
+            "image_b64": image_b64,
+            "left": left,
+            "top": top,
+            "right": right,
+            "bottom": bottom,
+        },
+    )
+
+    return json.dumps({
+        "operation": "crop",
+        "image_base64": processed,
+    })
+@tool
+def add_noise_image(amount: float = 0.05) -> str:
+    """Add salt-and-pepper noise to the uploaded image. Amount should be between 0 and 1."""
+    image_b64 = _current_image_b64.get()
+    if not image_b64:
+        return json.dumps({"error": "No image was provided by the user."})
+
+    processed = _run_img_proc_mcp(
+        "add_noise",
+        {
+            "image_b64": image_b64,
+            "amount": amount,
+        },
+    )
+
+    return json.dumps({
+        "operation": "add_noise",
+        "image_base64": processed,
+    })
+@tool
+def edit_detected_object(
+    object_label: str,
+    occurrence: int,
+    operation: str,
+    angle: float = 90,
+    radius: float = 2,
+) -> str:
+    """Edit a detected object in the uploaded image. Returns JSON with image_base64."""
+    print(">>> edit_detected_object called")
+    image_b64 = _current_image_b64.get()
+    if not image_b64:
+        return json.dumps({"error": "No image was provided by the user."})
+
+    image_bytes = base64.b64decode(image_b64)
+
+    chat_id = str(uuid.uuid4())
+    prediction_id = str(uuid.uuid4())
+    image_name = "image.jpg"
+
+    original_key = f"{chat_id}/{prediction_id}/original/{image_name}"
+    import boto3
+
+    sts = boto3.client("sts")
+
+    print(sts.get_caller_identity())
+    upload_bytes_to_s3(
+        data=image_bytes,
+        key=original_key,
+        content_type="image/jpeg",
+    )
+
+    with httpx.Client(timeout=60.0) as client:
+        response = client.post(
+            f"{YOLO_SERVICE_URL}/predict",
+            json={
+                "image_s3_key": original_key,
+                "chat_id": chat_id,
+                "prediction_id": prediction_id,
+                "image_name": image_name,
+            },
+        )
+        response.raise_for_status()
+
+    prediction = response.json()
+    detections = [
+    d
+    for d in prediction["detection_objects"]
+    if d["label"] == object_label
+    ]
+
+    if len(detections) < occurrence:
+        return json.dumps({
+            "error": f"Could not find {occurrence} '{object_label}' objects."
+    })
+
+    target = detections[occurrence - 1]
+    box = target["box"]
+
+    cropped_img, safe_box = _crop_region(image_b64, box)
+    cropped_b64 = _encode_image(cropped_img)
+
+    if operation == "blur":
+        processed_crop_b64 = _run_img_proc_mcp(
+            "blur",
+            {
+                "image_b64": cropped_b64,
+                "radius": radius,
+            },
+        )
+    elif operation == "rotate":
+        processed_crop_b64 = _run_img_proc_mcp(
+            "rotate",
+            {
+                "image_b64": cropped_b64,
+                "angle": angle,
+            },
+        )
+    elif operation == "flip":
+        processed_crop_b64 = _run_img_proc_mcp(
+            "flip",
+            {
+                "image_b64": cropped_b64,
+                "direction": "horizontal",
+            },
+        )
+    elif operation == "add_noise":
+        processed_crop_b64 = _run_img_proc_mcp(
+            "add_noise",
+            {
+                "image_b64": cropped_b64,
+                "amount": 0.1,
+            },
+        )
+    else:
+        return json.dumps({
+            "error": f"Unsupported object operation: {operation}"
+        })
+
+    final_image_b64 = _paste_region(image_b64, processed_crop_b64, safe_box)
+
+    return json.dumps({
+        "operation": f"{operation}_object",
+        "image_base64": final_image_b64,
+    })
 # Registry: map tool name -> tool function
 TOOLS = {
-    detect_objects.name: detect_objects
+    detect_objects.name: detect_objects,
+    rotate_image.name: rotate_image,
+    flip_image.name: flip_image,
+    blur_image.name: blur_image,
+    resize_image.name: resize_image,
+    crop_image.name: crop_image,
+    add_noise_image.name: add_noise_image,
+    edit_detected_object.name: edit_detected_object,
 }
 rate_limiter = InMemoryRateLimiter(
     requests_per_second=5,
@@ -127,63 +410,57 @@ rate_limiter = InMemoryRateLimiter(
     max_bucket_size=10,
 )
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
-llm_with_tools = None
-MAX_INPUT_TOKENS = None
+llm = init_chat_model(
 
+    MODEL.replace("bedrock/", ""),
 
-def get_llm_with_tools():
-    """Create the Bedrock model on first use so imports and tests stay offline."""
-    global llm_with_tools, MAX_INPUT_TOKENS
+    model_provider="bedrock_converse",
 
-    if llm_with_tools is not None:
-        return llm_with_tools
+    temperature=0,
 
-    if MODEL not in ALLOWED_MODELS:
-        allowed_list = "\n  ".join(sorted(ALLOWED_MODELS))
-        raise RuntimeError(
-            f"MODEL='{MODEL}' is not allowed. Set MODEL to one of:\n  {allowed_list}"
-        )
+    rate_limiter=rate_limiter,
 
-    model_options = {}
-    if MODEL.startswith("bedrock/openai."):
-        model_options["additional_model_request_fields"] = {
-            "reasoning_effort": "low"
-        }
+    region_name=AWS_REGION,
 
-    llm = init_chat_model(
-        MODEL.replace("bedrock/", ""),
-        model_provider="bedrock_converse",
-        temperature=0,
-        max_tokens=1024,
-        timeout=60,
-        max_retries=1,
-        rate_limiter=rate_limiter,
-        region_name=AWS_REGION,
-        **model_options,
+)
+MODEL_PROFILE = llm.profile or {}
+
+if not MODEL_PROFILE.get("tool_calling"):
+    raise SystemExit(
+        f"[ERROR] MODEL='{MODEL}' does not support tool calling."
     )
-    model_profile = llm.profile or {}
 
-    if not model_profile.get("tool_calling"):
-        raise RuntimeError(f"MODEL='{MODEL}' does not support tool calling.")
+if not MODEL_PROFILE.get("structured_output"):
+    raise SystemExit(
+        f"[ERROR] MODEL='{MODEL}' does not support structured output."
+    )
 
-    MAX_INPUT_TOKENS = model_profile.get("max_input_tokens")
-    if MAX_INPUT_TOKENS is None:
-        logging.warning(
-            "Model profile does not expose max_input_tokens; "
-            "context limit checks will be skipped."
-        )
-    else:
-        logging.info("Model max_input_tokens: %s", MAX_INPUT_TOKENS)
+MAX_INPUT_TOKENS = MODEL_PROFILE.get("max_input_tokens")
 
-    llm_with_tools = llm.bind_tools(list(TOOLS.values()))
-    return llm_with_tools
-
+if MAX_INPUT_TOKENS is None:
+    logging.warning(
+        "Model profile does not expose max_input_tokens; context limit checks will be skipped."
+    )
+else:
+    logging.info(f"Model max_input_tokens: {MAX_INPUT_TOKENS}")
+llm_with_tools = llm.bind_tools(list(TOOLS.values()))
+operation_messages = {
+    "rotate": "Rotated the image.",
+    "flip": "Flipped the image.",
+    "blur": "Blurred the image.",
+    "resize": "Resized the image.",
+    "crop": "Cropped the image.",
+    "add_noise": "Added noise to the image.",
+    "blur_object": "Blurred the selected object.",
+    "rotate_object": "Rotated the selected object.",
+    "flip_object": "Flipped the selected object.",
+    "add_noise_object": "Added noise to the selected object.",
+}
 
 class TokenUsage(BaseModel):
     input: int = 0
     output: int = 0
     total: int = 0
-
 
 def run_agent(history: list, max_iterations: int = 10):
     """
@@ -202,18 +479,16 @@ def run_agent(history: list, max_iterations: int = 10):
     iterations = 0
     tokens_used = TokenUsage()
     context_limit_exceeded = False
-    model = get_llm_with_tools()
-
     for iteration in range(max_iterations):
         iterations = iteration + 1
-        response: AIMessage = model.invoke(messages)
+        response: AIMessage = llm_with_tools.invoke(messages)
         messages.append(response)
         usage = response.usage_metadata or {}
 
         tokens_used = TokenUsage(
-            input=usage.get("input_tokens", 0),
-            output=usage.get("output_tokens", 0),
-            total=usage.get("total_tokens", 0),
+        input=usage.get("input_tokens", 0),
+        output=usage.get("output_tokens", 0),
+        total=usage.get("total_tokens", 0),
         )
         context_limit_exceeded = (
             MAX_INPUT_TOKENS is not None
@@ -223,20 +498,17 @@ def run_agent(history: list, max_iterations: int = 10):
             content = response.content
 
             if isinstance(content, list):
-                content = "\n".join(
-                    part.get("text", "")
-                    for part in content
-                    if isinstance(part, dict) and part.get("type") == "text"
-                )
 
-            content = re.sub(
-                r"<thinking>.*?</thinking>\s*",
-                "",
-                content,
-                flags=re.DOTALL,
+                content = "\n".join(
+
+                part.get("text", "")
+
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
             )
 
             return {
+
                 "response": content,
                 "prediction_id": prediction_id,
                 "annotated_image": annotated_image,
@@ -259,9 +531,32 @@ def run_agent(history: list, max_iterations: int = 10):
                 data = json.loads(tool_result.content)
 
                 uid = data.get("uid") or data.get("prediction_uid")
+                predicted_image_path = data.get("predicted_image")
+
                 if uid:
                     prediction_id = uid
-                    annotated_image_url = f"/prediction/{uid}/image"
+                    annotated_image_url = (
+                        f"{YOLO_SERVICE_URL}/prediction/{uid}/image"
+                    )
+
+                if predicted_image_path:
+                    annotated_image_url = predicted_image_path
+                processed_image_b64 = data.get("image_base64")
+                if processed_image_b64:
+                    annotated_image = processed_image_b64
+
+                    operation = data.get("operation", "processed")
+                    return {
+                        "response": operation_messages.get(operation, "Processed the image."),
+                        "prediction_id": prediction_id,
+                        "annotated_image": annotated_image,
+                        "annotated_image_url": annotated_image_url,
+                        "agent_loop_time_s": round(time.time() - start_time, 2),
+                        "iterations": iterations,
+                        "tools_called": tools_called,
+                        "context_limit_exceeded": context_limit_exceeded,
+                        "tokens_used": tokens_used,
+    }
 
             except Exception:
                 logging.exception(
@@ -270,17 +565,16 @@ def run_agent(history: list, max_iterations: int = 10):
 
 
     return {
-        "response": "The agent stopped because it reached the maximum number of iterations.",
-        "prediction_id": prediction_id,
-        "annotated_image": annotated_image,
-        "annotated_image_url": annotated_image_url,
-        "agent_loop_time_s": round(time.time() - start_time, 2),
-        "iterations": iterations,
-        "tools_called": tools_called,
-        "context_limit_exceeded": True,
-        "tokens_used": tokens_used,
-    }
-
+    "response": "The agent stopped because it reached the maximum number of iterations.",
+    "prediction_id": prediction_id,
+    "annotated_image": annotated_image,
+    "annotated_image_url": annotated_image_url,
+    "agent_loop_time_s": round(time.time() - start_time, 2),
+    "iterations": iterations,
+    "tools_called": tools_called,
+    "context_limit_exceeded": True,
+    "tokens_used": tokens_used,
+}
 
 app = FastAPI(title="Vision Agent")
 
@@ -303,13 +597,16 @@ app.add_middleware(
 
 
 class ChatMessage(BaseModel):
-    role: str  # "user" or "assistant"
+    role: str                           # "user" or "assistant"
     content: str
-    image_base64: Optional[str] = None
+    image_base64: Optional[str] = None  # only on user messages that carry an image
 
 
 class ChatRequest(BaseModel):
-    messages: list[ChatMessage]
+    messages: list[ChatMessage]         # full conversation thread, oldest first
+
+
+
 
 
 class ChatResponse(BaseModel):
@@ -332,12 +629,8 @@ def chat(request: ChatRequest):
     for msg in request.messages:
         if msg.role == "user":
             if msg.image_base64:
-                latest_image = msg.image_base64
-                content = (
-                    msg.content
-                    + "\n[An image was uploaded. Use existing tools to analyze "
-                    "it according to user instructions.]"
-                )
+                latest_image = msg.image_base64          # saved for detect_objects tool
+                content = msg.content + "\n[An image was uploaded. Use existing tools to analyze it according to user instructions.]"
             else:
                 content = msg.content
             lc_messages.append(HumanMessage(content=content))

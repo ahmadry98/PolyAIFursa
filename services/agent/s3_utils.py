@@ -1,5 +1,9 @@
+from dotenv import load_dotenv
+
+load_dotenv()
 import os
 import boto3
+
 
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 AWS_S3_BUCKET = os.environ.get("AWS_S3_BUCKET", "test-bucket")

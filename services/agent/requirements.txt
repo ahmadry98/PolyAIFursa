@@ -9,7 +9,7 @@ langchain-aws
 langchain[openai]
 langchain[anthropic]
 langchain[google-genai]
-
+mcp[cli]
 
 httpx
 pydantic
