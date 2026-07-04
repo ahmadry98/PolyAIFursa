@@ -36,7 +36,12 @@ services:
       AWS_REGION: "${AWS_REGION:-us-east-1}"
     networks:
       - polyai-net
-
+  node-exporter:
+    image: prom/node-exporter
+    ports:
+      - "9100:9100"
+    networks:
+      - monitoring-net
   prometheus:
     image: prom/prometheus
     ports:
@@ -46,6 +51,7 @@ services:
       - prometheus-data:/prometheus
     depends_on:
       - yolo
+      - node-exporter
     networks:
       - polyai-net
       - monitoring-net
@@ -60,6 +66,7 @@ services:
       - prometheus
     networks:
       - monitoring-net
+
 
 volumes:
   prometheus-data:
