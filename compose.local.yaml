@@ -1,0 +1,16 @@
+services:
+  agent:
+    environment:
+      AWS_PROFILE: "${AWS_PROFILE:-default}"
+      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
+      AWS_CONFIG_FILE: /aws/config
+    volumes:
+      - ${HOME}/.aws:/aws:ro
+
+  yolo:
+    environment:
+      AWS_PROFILE: "${AWS_PROFILE:-default}"
+      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
+      AWS_CONFIG_FILE: /aws/config
+    volumes:
+      - ${HOME}/.aws:/aws:ro

@@ -1,0 +1,53 @@
+name: Docker Scout
+
+on:
+  push:
+    branches:
+      - dev
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  docker-scout:
+    if: github.event_name == 'push' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - name: yolo
+            context: ./services/yolo
+            image: yolo-service
+          - name: agent
+            context: ./services/agent
+            image: agent-service
+          - name: frontend
+            context: ./services/frontend
+            image: frontend-service
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build ${{ matrix.service.name }} image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.service.context }}
+          push: false
+          load: true
+          tags: ${{ matrix.service.image }}:scout
+
+      - name: Docker Scout scan ${{ matrix.service.name }}
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: ${{ matrix.service.image }}:scout
+          only-severities: critical,high
+          exit-code: true

@@ -1,0 +1,14 @@
+.venv
+__pycache__
+.pytest_cache
+tests
+*.pyc
+*.db
+uploads
+coverage.xml
+.coverage
+*.html
+*.pdf
+*.jpeg
+*.jpg
+*.png
