@@ -22,6 +22,13 @@ export default function MessageBubble({ message }: { message: ChatMessage }) {
             className="mb-2 max-h-48 rounded-lg object-contain"
           />
         )}
+        {message.image_url && (
+          <img
+            src={message.image_url}
+            alt="objects detected in the uploaded image"
+            className="mb-2 max-h-80 rounded-lg object-contain"
+          />
+        )}
         {isUser ? (
           <p className="whitespace-pre-wrap">{message.content}</p>
         ) : (

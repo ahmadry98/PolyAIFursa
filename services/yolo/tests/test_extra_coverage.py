@@ -26,12 +26,30 @@ def add_prediction(db_session, uid, predicted_image):
 
 def test_predict_rejects_non_image_file(client):
     response = client.post(
-        "/predict/upload",
+        "/predict",
         files={"file": ("test.txt", b"hello", "text/plain")},
     )
 
     assert response.status_code == 400
     assert response.json() == {"detail": "Only image files are supported"}
+
+
+def test_predict_upload_route_does_not_exist(client):
+    response = client.post(
+        "/predict/upload",
+        files={"file": ("image.jpg", b"image", "image/jpeg")},
+    )
+
+    assert response.status_code == 404
+
+
+def test_predict_requires_one_image_source(client):
+    response = client.post("/predict")
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "Provide an image file or image_s3_key"
+    }
 
 
 def test_get_prediction_by_uid_success(client, db_session):
@@ -80,6 +98,21 @@ def test_get_prediction_image_success(client, db_session, tmp_path):
 
     assert response.status_code == 200
     assert response.content == b"fake image content"
+
+
+def test_get_prediction_image_downloads_s3_object(client, db_session):
+    add_prediction(
+        db_session,
+        "s3-image",
+        "chat-1/s3-image/predicted/image.png",
+    )
+
+    with patch("app.download_bytes_from_s3", return_value=b"png bytes"):
+        response = client.get("/prediction/s3-image/image")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.content == b"png bytes"
 
 
 def test_get_prediction_image_not_found_when_uid_missing(client):

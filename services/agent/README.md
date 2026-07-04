@@ -20,17 +20,16 @@ Configure environment:
 
 ```bash
 cp .env.example .env
-# Edit .env and set at least OPENAI_API_KEY (or another provider key) and MODEL
+# Edit .env and set the shared AWS/S3 configuration and MODEL
 ```
 
 `.env` variables:
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENAI_API_KEY` | - | Required for OpenAI models |
-| `ANTHROPIC_API_KEY` | - | Required for Anthropic models |
-| `GOOGLE_API_KEY` | - | Required for Google models |
-| `MODEL` | `claude-sonnet-4-6` | Any model string supported by `init_chat_model` |
+| `MODEL` | - | One of the text-only Bedrock models allowed in `app.py` |
+| `AWS_REGION` | `us-east-1` | AWS region for Bedrock and S3 |
+| `AWS_S3_BUCKET` | `test-bucket` | Bucket shared by the agent and YOLO services |
 | `YOLO_SERVICE_URL` | `http://localhost:8080` | URL of the YOLO microservice |
 
 ## Running
@@ -60,13 +59,13 @@ Expected response:
 ```bash
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
-  -d '{"message": "Hello! What can you do?"}'
+  -d '{"messages": [{"role": "user", "content": "Hello! What can you do?"}]}'
 ```
 
 ### Send a message with an image
 
 ```bash
-echo "{\"message\": \"What objects are in this image?\", \"image_base64\": \"$(base64 -w0 beatles.jpeg)\"}" \
+echo "{\"messages\": [{\"role\": \"user\", \"content\": \"What objects are in this image?\", \"image_base64\": \"$(base64 < beatles.jpeg | tr -d '\\n')\"}]}" \
   | curl -X POST http://localhost:8000/chat \
          -H "Content-Type: application/json" \
          -d @-
@@ -80,8 +79,13 @@ Request body:
 
 ```json
 {
-  "message": "string (optional, defaults to 'What's in this image?')",
-  "image_base64": "string (optional, base64-encoded JPEG or PNG)"
+  "messages": [
+    {
+      "role": "user or assistant",
+      "content": "message text",
+      "image_base64": "optional raw base64 JPEG or PNG, user messages only"
+    }
+  ]
 }
 ```
 

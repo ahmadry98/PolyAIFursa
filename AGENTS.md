@@ -11,16 +11,6 @@ services/
 ```
 
 
-**Do this:**
-> Run this in your terminal inside `services/agent/`:
-> ```
-> pip install -r requirements.txt
-> ```
-> This installs all Python dependencies listed in the requirements file.
-
-**Not this:** *(silently running pip/npm/git in the background)*
-
----
 
 ## Course Content Reference
 

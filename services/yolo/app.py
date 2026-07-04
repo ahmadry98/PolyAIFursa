@@ -1,14 +1,17 @@
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, HTTPException, UploadFile, File
-from fastapi.responses import FileResponse
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse, Response
 from prometheus_fastapi_instrumentator import Instrumentator
 from ultralytics import YOLO
 from PIL import Image
 import logging
 import os
 import uuid
-import shutil
 import time
 import signal
 from s3_utils import download_bytes_from_s3, upload_file_to_s3
@@ -53,12 +56,7 @@ class PredictionResponse(BaseModel):
     labels: list[str]
     time_took: float
 
-class PredictRequest(BaseModel):
-    image_s3_key: str
-    chat_id: str | None = None
-    prediction_id: str | None = None
-    image_name: str = "image.jpg"
-    
+
 @app.on_event("startup")
 def startup_event():
     database.Base.metadata.create_all(bind=database.engine)
@@ -67,11 +65,15 @@ def startup_event():
 @app.on_event("shutdown")
 def shutdown_event():
     logging.info("Received SIGTERM - shutting down gracefully")
+
+
 logging.basicConfig(level=logging.INFO)
+
 
 def graceful_shutdown(signum, frame):
     logging.info("Received SIGTERM - shutting down gracefully")
     sys.exit(0)
+
 
 signal.signal(signal.SIGTERM, graceful_shutdown)
 # Add Prometheus metrics endpoint at /metrics
@@ -118,18 +120,51 @@ model = YOLO("yolov8n.pt")
 
 
 @app.post("/predict", response_model=PredictionResponse)
-def predict(request: PredictRequest, db: Session = Depends(get_db)):
+def predict(
+    db: Session = Depends(get_db),
+    image_s3_key: str | None = None,
+    file: UploadFile | None = File(default=None),
+):
     """
-    Upload an image, run YOLO object detection, save the result,
-    and return prediction details.
+    Run object detection from either the original multipart upload or an S3 key.
+
+    The optional image_s3_key query parameter is used by the agent. Multipart
+    uploads keep the original /predict API contract.
     """
     start_time = time.time()
 
     allowed_extensions = [".jpg", ".jpeg", ".png"]
 
-    image_name = request.image_name or "image.jpg"
-    ext = os.path.splitext(image_name)[1] or ".jpg"
-    uid = request.prediction_id or str(uuid.uuid4())
+    if image_s3_key is None and file is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide an image file or image_s3_key",
+        )
+
+    if image_s3_key is not None and file is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either an image file or image_s3_key, not both",
+        )
+
+    if image_s3_key is not None:
+        key_parts = image_s3_key.split("/")
+        if len(key_parts) != 4 or key_parts[2] != "original":
+            raise HTTPException(
+                status_code=400,
+                detail="image_s3_key must use chat/prediction/original/filename",
+            )
+
+        chat_id = key_parts[0]
+        uid = key_parts[1]
+        image_name = key_parts[3]
+    else:
+        assert file is not None
+        chat_id = None
+        uid = str(uuid.uuid4())
+        image_name = file.filename or ""
+
+    ext = os.path.splitext(image_name)[1].lower()
 
     if ext not in allowed_extensions:
         raise HTTPException(
@@ -140,12 +175,16 @@ def predict(request: PredictRequest, db: Session = Depends(get_db)):
     original_path = os.path.join(UPLOAD_DIR, uid + ext)
     predicted_path = os.path.join(PREDICTED_DIR, uid + ext)
 
-    image_bytes = download_bytes_from_s3(request.image_s3_key)
+    if image_s3_key is not None:
+        image_bytes = download_bytes_from_s3(image_s3_key)
+        with open(original_path, "wb") as image_file:
+            image_file.write(image_bytes)
+        original_image_value = image_s3_key
+    else:
+        with open(original_path, "wb") as image_file:
+            image_file.write(file.file.read())
+        original_image_value = original_path
 
-    with open(original_path, "wb") as f:
-        f.write(image_bytes)
-
-    original_image_value = request.image_s3_key
     # Run YOLO prediction on CPU
     results = model(original_path, device="cpu", conf=CONFIDENCE_THRESHOLD)
 
@@ -153,9 +192,14 @@ def predict(request: PredictRequest, db: Session = Depends(get_db)):
     annotated_frame = results[0].plot()
     annotated_image = Image.fromarray(annotated_frame)
     annotated_image.save(predicted_path)
-    predicted_key = f"{request.chat_id or 'default-chat'}/{uid}/predicted/{image_name}"
-    upload_file_to_s3(predicted_path, predicted_key)
-    predicted_image_value = predicted_key
+
+    if image_s3_key is not None:
+        predicted_key = f"{chat_id}/{uid}/predicted/{image_name}"
+        content_type = "image/png" if ext == ".png" else "image/jpeg"
+        upload_file_to_s3(predicted_path, predicted_key, content_type)
+        predicted_image_value = predicted_key
+    else:
+        predicted_image_value = predicted_path
 
     detected_labels = []
     detection_objects = []
@@ -167,88 +211,13 @@ def predict(request: PredictRequest, db: Session = Depends(get_db)):
         bbox = box.xyxy[0].tolist()
 
         detected_labels.append(label)
-        detections_to_save.append({
-            "label": label,
-            "score": score,
-            "box": bbox,
-        })
-
-        detection_objects.append(
-            DetectionObjectResponse(
-                id=len(detection_objects),
-                label=label,
-                score=score,
-                box=bbox
-            )
+        detections_to_save.append(
+            {
+                "label": label,
+                "score": score,
+                "box": bbox,
+            }
         )
-
-    # Store the session and all of its objects in one transaction.
-    prediction = add_prediction(
-        db,
-        uid,
-        original_path,
-        predicted_path,
-        detections_to_save,
-    )
-    # Calculate total processing time
-    processing_time = round(time.time() - start_time, 2)
-
-    return PredictionResponse(
-    uid=uid,
-    timestamp=format_timestamp(prediction.timestamp),
-    original_image=original_image_value,
-    predicted_image=predicted_image_value,
-    detection_objects=detection_objects,
-    detection_count=len(detection_objects),
-    labels=detected_labels,
-    time_took=processing_time,
-)
-@app.post("/predict/upload", response_model=PredictionResponse)
-def predict_upload(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """
-    Backward-compatible file upload endpoint for tests/manual uploads.
-    Main /predict endpoint uses S3 object keys.
-    """
-    start_time = time.time()
-
-    ext = os.path.splitext(file.filename)[1]
-    uid = str(uuid.uuid4())
-
-    allowed_extensions = [".jpg", ".jpeg", ".png"]
-    if ext not in allowed_extensions:
-        raise HTTPException(
-            status_code=400,
-            detail="Only image files are supported"
-        )
-
-    original_path = os.path.join(UPLOAD_DIR, uid + ext)
-    predicted_path = os.path.join(PREDICTED_DIR, uid + ext)
-
-    with open(original_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-
-    results = model(original_path, device="cpu", conf=CONFIDENCE_THRESHOLD)
-
-    annotated_frame = results[0].plot()
-    annotated_image = Image.fromarray(annotated_frame)
-    annotated_image.save(predicted_path)
-
-    detected_labels = []
-    detection_objects = []
-    detections_to_save = []
-
-    for box in results[0].boxes:
-        label_idx = int(box.cls[0].item())
-        label = model.names[label_idx]
-        score = float(box.conf[0])
-        bbox = box.xyxy[0].tolist()
-
-        detected_labels.append(label)
-        detections_to_save.append({
-            "label": label,
-            "score": score,
-            "box": bbox,
-        })
 
         detection_objects.append(
             DetectionObjectResponse(
@@ -259,26 +228,28 @@ def predict_upload(file: UploadFile = File(...), db: Session = Depends(get_db)):
             )
         )
 
+    # Store the session and all of its objects in one transaction.
     prediction = add_prediction(
         db,
         uid,
-        original_path,
-        predicted_path,
+        original_image_value,
+        predicted_image_value,
         detections_to_save,
     )
-
+    # Calculate total processing time
     processing_time = round(time.time() - start_time, 2)
 
     return PredictionResponse(
         uid=uid,
         timestamp=format_timestamp(prediction.timestamp),
-        original_image=original_path,
-        predicted_image=predicted_path,
+        original_image=original_image_value,
+        predicted_image=predicted_image_value,
         detection_objects=detection_objects,
         detection_count=len(detection_objects),
         labels=detected_labels,
         time_took=processing_time,
     )
+
 
 @app.get("/prediction/{uid}")
 def get_prediction_by_uid(uid: str, db: Session = Depends(get_db)):
@@ -313,10 +284,25 @@ def get_prediction_image(uid: str, db: Session = Depends(get_db)):
     Return the annotated image for a prediction.
     """
     prediction = find_prediction(db, uid)
-    if prediction is None or not os.path.exists(prediction.predicted_image):
+    if prediction is None:
         raise HTTPException(status_code=404, detail="Image not found")
 
-    return FileResponse(prediction.predicted_image)
+    if os.path.exists(prediction.predicted_image):
+        return FileResponse(prediction.predicted_image)
+
+    key_parts = prediction.predicted_image.split("/")
+    if len(key_parts) != 4 or key_parts[2] != "predicted":
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    try:
+        image_bytes = download_bytes_from_s3(prediction.predicted_image)
+    except Exception:
+        logging.exception("Could not download predicted image from S3")
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    extension = os.path.splitext(prediction.predicted_image)[1].lower()
+    media_type = "image/png" if extension == ".png" else "image/jpeg"
+    return Response(content=image_bytes, media_type=media_type)
 
 
 @app.get("/predictions/label/")
