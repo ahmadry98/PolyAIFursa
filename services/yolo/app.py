@@ -55,8 +55,7 @@ class PredictionResponse(BaseModel):
     detection_count: int
     labels: list[str]
     time_took: float
-
-
+    
 @app.on_event("startup")
 def startup_event():
     database.Base.metadata.create_all(bind=database.engine)
@@ -65,15 +64,11 @@ def startup_event():
 @app.on_event("shutdown")
 def shutdown_event():
     logging.info("Received SIGTERM - shutting down gracefully")
-
-
 logging.basicConfig(level=logging.INFO)
-
 
 def graceful_shutdown(signum, frame):
     logging.info("Received SIGTERM - shutting down gracefully")
     sys.exit(0)
-
 
 signal.signal(signal.SIGTERM, graceful_shutdown)
 # Add Prometheus metrics endpoint at /metrics
