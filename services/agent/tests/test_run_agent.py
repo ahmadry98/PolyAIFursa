@@ -2,6 +2,7 @@
 import importlib.util
 import base64
 import io
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -28,6 +29,11 @@ finally:
         sys.modules["s3_utils"] = previous_s3_utils
     else:
         sys.modules.pop("s3_utils", None)
+
+agent_runner = importlib.import_module("agent_runner")
+config = importlib.import_module("config")
+image_utils = importlib.import_module("image_utils")
+tools = importlib.import_module("tools")
 
 
 class FakeLLMWithTools:
@@ -79,11 +85,10 @@ class FakeTool:
 def test_run_agent_calls_tool_and_returns_final_answer(monkeypatch):
     fake_llm = FakeLLMWithTools()
 
-    monkeypatch.setattr(app, "llm_with_tools", fake_llm)
-    monkeypatch.setattr(app, "TOOLS", {"detect_objects": FakeTool()})
-    monkeypatch.setattr(app, "YOLO_SERVICE_URL", "http://localhost:8080")
+    monkeypatch.setattr(config, "llm_with_tools", fake_llm)
+    monkeypatch.setattr(agent_runner, "TOOLS", {"detect_objects": FakeTool()})
 
-    result = app.run_agent(
+    result = agent_runner.run_agent(
         [HumanMessage(content="What objects are in this image?")]
     )
 
@@ -155,12 +160,12 @@ def test_run_agent_uploads_processed_tool_image(monkeypatch):
 
     fake_llm = ImageProcessingLLM()
 
-    monkeypatch.setattr(app, "llm_with_tools", fake_llm)
-    monkeypatch.setattr(app, "TOOLS", {"rotate_image": ImageProcessingTool()})
-    monkeypatch.setattr(app.uuid, "uuid4", lambda: "processed-image-id")
-    monkeypatch.setattr(app, "upload_bytes_to_s3", fake_upload_bytes_to_s3)
+    monkeypatch.setattr(config, "llm_with_tools", fake_llm)
+    monkeypatch.setattr(agent_runner, "TOOLS", {"rotate_image": ImageProcessingTool()})
+    monkeypatch.setattr(image_utils.uuid, "uuid4", lambda: "processed-image-id")
+    monkeypatch.setattr(image_utils, "upload_bytes_to_s3", fake_upload_bytes_to_s3)
 
-    result = app.run_agent([HumanMessage(content="Rotate this image")])
+    result = agent_runner.run_agent([HumanMessage(content="Rotate this image")])
 
     assert result["response"] == "I rotated the image."
     assert result["annotated_image"] is None
@@ -212,10 +217,10 @@ def test_run_agent_stops_at_max_iterations(monkeypatch):
                 ],
             )
 
-    monkeypatch.setattr(app, "llm_with_tools", AlwaysToolCallingLLM())
-    monkeypatch.setattr(app, "TOOLS", {"detect_objects": FakeTool()})
+    monkeypatch.setattr(config, "llm_with_tools", AlwaysToolCallingLLM())
+    monkeypatch.setattr(agent_runner, "TOOLS", {"detect_objects": FakeTool()})
 
-    result = app.run_agent(
+    result = agent_runner.run_agent(
         [HumanMessage(content="Keep detecting objects")],
         max_iterations=1,
     )
@@ -232,7 +237,7 @@ def test_sort_detections_from_right():
         {"label": "person", "box": [50, 0, 60, 100]},
     ]
 
-    sorted_detections = app._sort_detections_horizontally(
+    sorted_detections = image_utils._sort_detections_horizontally(
         detections,
         user_text="rotate the second person from the right",
     )
@@ -251,7 +256,7 @@ def test_sort_detections_from_right_ignores_tiny_background_detection():
         {"label": "person", "box": [115, 5, 119, 20]},
     ]
 
-    sorted_detections = app._sort_detections_horizontally(
+    sorted_detections = image_utils._sort_detections_horizontally(
         detections,
         user_text="blur the second person from the right",
     )
@@ -271,13 +276,13 @@ def test_rotate_image_passes_angle_to_image_tool(monkeypatch):
         captured["arguments"] = arguments
         return "processed-image"
 
-    monkeypatch.setattr(app, "_run_img_proc_mcp", fake_run_img_proc_mcp)
-    token = app._current_image_b64.set("image-base64")
+    monkeypatch.setattr(tools, "_run_img_proc_mcp", fake_run_img_proc_mcp)
+    token = tools._current_image_b64.set("image-base64")
 
     try:
-        result = app.rotate_image.invoke({"angle": 90})
+        result = tools.rotate_image.invoke({"angle": 90})
     finally:
-        app._current_image_b64.reset(token)
+        tools._current_image_b64.reset(token)
 
     assert captured["tool_name"] == "rotate"
     assert captured["arguments"]["angle"] == 90
@@ -306,14 +311,14 @@ def test_edit_detected_object_uses_occurrence_from_right(monkeypatch):
         captured["arguments"] = arguments
         return arguments["image_b64"]
 
-    monkeypatch.setattr(app, "_detect_uploaded_image", fake_detect_uploaded_image)
-    monkeypatch.setattr(app, "_run_img_proc_mcp", fake_run_img_proc_mcp)
-    token = app._current_image_b64.set(image_b64)
-    text_token = app._current_user_text.set("rotate the second person from the right")
+    monkeypatch.setattr(tools, "_detect_uploaded_image", fake_detect_uploaded_image)
+    monkeypatch.setattr(tools, "_run_img_proc_mcp", fake_run_img_proc_mcp)
+    token = tools._current_image_b64.set(image_b64)
+    text_token = tools._current_user_text.set("rotate the second person from the right")
 
     try:
         result = json.loads(
-            app.edit_detected_object.invoke(
+            tools.edit_detected_object.invoke(
                 {
                     "object_label": "person",
                     "occurrence": 2,
@@ -323,8 +328,8 @@ def test_edit_detected_object_uses_occurrence_from_right(monkeypatch):
             )
         )
     finally:
-        app._current_image_b64.reset(token)
-        app._current_user_text.reset(text_token)
+        tools._current_image_b64.reset(token)
+        tools._current_user_text.reset(text_token)
 
     cropped = Image.open(
         io.BytesIO(base64.b64decode(captured["arguments"]["image_b64"]))
