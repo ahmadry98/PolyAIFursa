@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 import asyncio
 import base64
 import binascii
@@ -12,8 +14,6 @@ import uuid
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Optional
-from dotenv import load_dotenv
-load_dotenv()
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
