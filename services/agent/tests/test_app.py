@@ -107,14 +107,7 @@ def test_chat_object_edit_goes_through_run_agent(monkeypatch):
             },
         }
 
-    class FakeEditTool:
-        name = "edit_detected_object"
-
-        def invoke(self, args):
-            raise AssertionError("chat should not call edit_detected_object directly")
-
     monkeypatch.setattr(app, "run_agent", fake_run_agent)
-    monkeypatch.setattr(app, "edit_detected_object", FakeEditTool())
 
     response = client.post(
         "/chat",

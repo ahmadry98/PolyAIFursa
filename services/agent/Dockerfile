@@ -15,6 +15,11 @@ RUN pip install --upgrade pip \
     && adduser --system --ingroup app app
 
 COPY services/agent/app.py .
+COPY services/agent/config.py .
+COPY services/agent/schemas.py .
+COPY services/agent/image_utils.py .
+COPY services/agent/tools.py .
+COPY services/agent/agent_runner.py .
 COPY services/agent/s3_utils.py .
 COPY services/img-proc-mcp/img_proc_app.py /img-proc-mcp/img_proc_app.py
 
