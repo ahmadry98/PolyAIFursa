@@ -289,6 +289,48 @@ def test_rotate_image_passes_angle_to_image_tool(monkeypatch):
     assert '"operation": "rotate"' in result
 
 
+def test_crop_image_rounds_float_coordinates(monkeypatch):
+    captured = {}
+
+    def fake_run_img_proc_mcp(tool_name, arguments):
+        captured["tool_name"] = tool_name
+        captured["arguments"] = arguments
+        return "processed-image"
+
+    monkeypatch.setattr(tools, "_run_img_proc_mcp", fake_run_img_proc_mcp)
+    token = tools._current_image_b64.set("image-base64")
+
+    try:
+        result = json.loads(
+            tools.crop_image.invoke(
+                {
+                    "left": 191.1942138671875,
+                    "top": 339.7136535644531,
+                    "right": 310.1331481933594,
+                    "bottom": 571.4204711914062,
+                }
+            )
+        )
+    finally:
+        tools._current_image_b64.reset(token)
+
+    assert captured["tool_name"] == "crop"
+    assert captured["arguments"] == {
+        "image_b64": "image-base64",
+        "left": 191,
+        "top": 340,
+        "right": 310,
+        "bottom": 571,
+    }
+    assert result["parameters"] == {
+        "left": 191,
+        "top": 340,
+        "right": 310,
+        "bottom": 571,
+    }
+    assert result["operation"] == "crop"
+
+
 def test_edit_detected_object_uses_occurrence_from_right(monkeypatch):
     image = Image.new("RGB", (120, 120), "white")
     image_buffer = io.BytesIO()
@@ -339,3 +381,44 @@ def test_edit_detected_object_uses_occurrence_from_right(monkeypatch):
     assert captured["arguments"]["angle"] == 90
     assert cropped.size == (15, 90)
     assert result["operation"] == "rotate_object"
+
+
+def test_edit_detected_object_can_crop_selected_object(monkeypatch):
+    image = Image.new("RGB", (120, 120), "white")
+    image_buffer = io.BytesIO()
+    image.save(image_buffer, format="PNG")
+    image_b64 = base64.b64encode(image_buffer.getvalue()).decode()
+
+    def fake_detect_uploaded_image(_image_b64):
+        return {
+            "detection_objects": [
+                {"label": "person", "box": [10, 10, 20, 100]},
+                {"label": "person", "box": [90, 10, 110, 100]},
+                {"label": "person", "box": [50, 10, 65, 100]},
+            ]
+        }
+
+    monkeypatch.setattr(tools, "_detect_uploaded_image", fake_detect_uploaded_image)
+    token = tools._current_image_b64.set(image_b64)
+    text_token = tools._current_user_text.set("crop the second person from the right")
+
+    try:
+        result = json.loads(
+            tools.edit_detected_object.invoke(
+                {
+                    "object_label": "person",
+                    "occurrence": 2,
+                    "operation": "crop",
+                }
+            )
+        )
+    finally:
+        tools._current_image_b64.reset(token)
+        tools._current_user_text.reset(text_token)
+
+    cropped = Image.open(io.BytesIO(base64.b64decode(result["image_base64"])))
+
+    assert result["operation"] == "crop_object"
+    assert result["scope"] == "selected_object"
+    assert result["parameters"]["box"] == [50, 10, 65, 100]
+    assert cropped.size == (15, 90)

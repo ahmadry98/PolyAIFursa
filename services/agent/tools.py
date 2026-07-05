@@ -1,15 +1,15 @@
 import asyncio
 import json
 import logging
-import sys
 from contextvars import ContextVar
 from typing import Any, Optional
+from urllib.parse import urlparse, urlunparse
 
 from langchain_core.tools import tool
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
 
-from config import IMG_PROC_MCP_SCRIPT
+from config import IMG_PROC_MCP_URL
 from image_utils import (
     _compact_detection_result,
     _crop_region,
@@ -26,13 +26,20 @@ _current_image_b64: ContextVar[Optional[str]] = ContextVar(
 _current_user_text: ContextVar[str] = ContextVar("current_user_text", default="")
 
 
-async def _call_img_proc_mcp(tool_name: str, arguments: dict[str, Any]) -> str:
-    server_params = StdioServerParameters(
-        command=sys.executable,
-        args=[IMG_PROC_MCP_SCRIPT],
+def _img_proc_mcp_endpoint() -> str:
+    parsed = urlparse(IMG_PROC_MCP_URL)
+    if parsed.path and parsed.path != "/":
+        return IMG_PROC_MCP_URL
+
+    return urlunparse(
+        parsed._replace(
+            path="/mcp",
+        )
     )
 
-    async with stdio_client(server_params) as (read, write):
+
+async def _call_img_proc_mcp(tool_name: str, arguments: dict[str, Any]) -> str:
+    async with streamable_http_client(_img_proc_mcp_endpoint()) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
             result = await session.call_tool(tool_name, arguments)
@@ -179,20 +186,24 @@ def resize_image(width: int, height: int) -> str:
 
 
 @tool
-def crop_image(left: int, top: int, right: int, bottom: int) -> str:
+def crop_image(left: float, top: float, right: float, bottom: float) -> str:
     """Crop the uploaded image using bounding box coordinates. Returns JSON with image_base64."""
     image_b64 = _current_image_b64.get()
     if not image_b64:
         return json.dumps({"error": "No image was provided by the user."})
 
+    crop_box = {
+        "left": int(round(left)),
+        "top": int(round(top)),
+        "right": int(round(right)),
+        "bottom": int(round(bottom)),
+    }
+
     processed = _run_img_proc_mcp(
         "crop",
         {
             "image_b64": image_b64,
-            "left": left,
-            "top": top,
-            "right": right,
-            "bottom": bottom,
+            **crop_box,
         },
     )
 
@@ -200,12 +211,7 @@ def crop_image(left: int, top: int, right: int, bottom: int) -> str:
         {
             "operation": "crop",
             "scope": "whole_image",
-            "parameters": {
-                "left": left,
-                "top": top,
-                "right": right,
-                "bottom": bottom,
-            },
+            "parameters": crop_box,
             "image_base64": processed,
         }
     )
@@ -249,12 +255,13 @@ def edit_detected_object(
 ) -> str:
     """Edit one detected object inside the uploaded image.
 
-    Use this when the user asks to blur, rotate, flip, or add noise to a specific detected object,
+    Use this when the user asks to blur, rotate, flip, crop, or add noise to a specific detected object,
     such as "the first person", "the car on the right", or "the second dog from the left".
 
     The tool detects objects with YOLO, selects the requested object, crops that object,
     applies the requested image-processing operation only to that crop, pastes the edited crop
-    back into the original image, and returns the full edited image.
+    back into the original image, and returns the full edited image. If the requested operation
+    is crop, the tool returns only the selected object's cropped image.
 
     If operation is rotate, the rotated crop may change dimensions, so the edited crop is resized
     back into the original object's bounding box before being pasted into the full image.
@@ -262,14 +269,14 @@ def edit_detected_object(
     Arguments:
     - object_label: YOLO label such as person, car, dog, cat, bicycle.
     - occurrence: 1 for first/leftmost/rightmost depending on user wording, 2 for second, etc.
-    - operation: one of blur, rotate, flip, add_noise.
+    - operation: one of blur, rotate, flip, crop, add_noise.
     - angle: degrees for rotate.
     - radius: blur radius for blur.
     - amount: noise amount for add_noise.
 
     Returns JSON with:
-    - operation: one of blur_object, rotate_object, flip_object, add_noise_object
-    - image_base64: full edited image as base64 PNG
+    - operation: one of blur_object, rotate_object, flip_object, crop_object, add_noise_object
+    - image_base64: full edited image or selected object crop as base64 PNG
     """
     image_b64 = _current_image_b64.get()
     if not image_b64:
@@ -307,7 +314,9 @@ def edit_detected_object(
     cropped_img, safe_box = _crop_region(image_b64, target["box"])
     cropped_b64 = _encode_image(cropped_img)
 
-    if operation == "blur":
+    if operation == "crop":
+        final_image_b64 = cropped_b64
+    elif operation == "blur":
         processed_crop_b64 = _run_img_proc_mcp(
             "blur",
             {
@@ -346,7 +355,8 @@ def edit_detected_object(
             }
         )
 
-    final_image_b64 = _paste_region(image_b64, processed_crop_b64, safe_box)
+    if operation != "crop":
+        final_image_b64 = _paste_region(image_b64, processed_crop_b64, safe_box)
 
     return json.dumps(
         {
@@ -363,9 +373,11 @@ def edit_detected_object(
                 "radius": radius if operation == "blur" else None,
                 "amount": amount if operation == "add_noise" else None,
                 "direction": "horizontal" if operation == "flip" else None,
+                "box": safe_box if operation == "crop" else None,
             },
             "processing_note": (
-                "The edited crop was pasted back into the original image. "
+                "For crop_object, only the selected object's cropped region is returned. "
+                "For other object operations, the edited crop was pasted back into the original image. "
                 "For rotate_object, the crop was resized back into the original "
                 "object bounding box after rotation."
             ),

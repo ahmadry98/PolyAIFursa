@@ -27,3 +27,7 @@ services:
       AWS_CONFIG_FILE: /aws/config
     volumes:
       - ${HOME}/.aws:/aws:ro
+
+  img-proc-mcp:
+    build:
+      context: ./services/img-proc-mcp
