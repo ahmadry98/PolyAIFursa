@@ -22,7 +22,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_core.tools import tool
 from mcp import ClientSession, StdioServerParameters
@@ -30,7 +30,7 @@ from mcp.client.stdio import stdio_client
 from PIL import Image
 from pydantic import BaseModel
 
-from s3_utils import upload_bytes_to_s3
+from s3_utils import download_bytes_from_s3, upload_bytes_to_s3
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,11 +64,22 @@ SYSTEM_PROMPT = (
     "For requests that ask what is in an image, identify objects, count objects, "
     "or locate objects, use the object detection tool. "
     "Report object counts exactly as provided in label_counts. "
-    "For requests that ask to rotate, flip, blur, resize, crop, add noise, "
-    "or edit a detected object in an image, use the appropriate image-processing tool. "
-    "When an image-processing tool returns an image, do not include the base64 string "
-    "or markdown image syntax in your response. "
-    "Reply with one short sentence describing what you did. "
+    "For whole-image requests that ask to rotate, flip, blur, resize, crop, "
+    "or add noise, use the matching whole-image processing tool. "
+    "For object-specific edit requests, use edit_detected_object. "
+    "If the user says 'person on the left' or 'person on the right', call "
+    'edit_detected_object with object_label="person", occurrence=1, and the '
+    "operation that matches the requested edit. "
+    "Do not refuse blur, rotate, flip, or add_noise requests on detected objects. "
+    "After an image-processing tool succeeds, write a helpful 2-3 sentence "
+    "explanation using the sanitized tool result details. Mention the edit, "
+    "target or scope, and important parameters such as angle, blur radius, "
+    "noise amount, resize dimensions, or crop region when available. "
+    "If the operation was applied to a detected object, mention that only the "
+    "selected object was changed and identify the selected object in natural language. "
+    "If operation is rotate_object, mention that rotating a cropped object may "
+    "change its dimensions, so it was resized back into the original bounding box. "
+    "Never include base64, markdown image syntax, or internal IDs in the final answer. "
     "The frontend will display the processed image automatically."
 )
 
@@ -92,6 +103,34 @@ def _decode_uploaded_image(image_b64: str) -> tuple[bytes, str, str]:
         return image_bytes, "image.png", "image/png"
 
     raise ValueError("Only JPEG and PNG images are supported.")
+
+
+def _store_processed_image(image_b64: str) -> str:
+    try:
+        image_bytes = base64.b64decode(image_b64, validate=True)
+    except (binascii.Error, ValueError, TypeError) as error:
+        raise ValueError("The processed image is not valid base64 data.") from error
+
+    image_id = str(uuid.uuid4())
+    key = f"processed/{image_id}/image.png"
+    upload_bytes_to_s3(
+        data=image_bytes,
+        key=key,
+        content_type="image/png",
+    )
+    return f"/processed/{image_id}/image"
+
+
+def _remove_none_values(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _remove_none_values(item)
+            for key, item in value.items()
+            if item is not None
+        }
+    if isinstance(value, list):
+        return [_remove_none_values(item) for item in value]
+    return value
 
 
 def _detect_uploaded_image(image_b64: str) -> dict[str, Any]:
@@ -278,6 +317,10 @@ def rotate_image(angle: float) -> str:
     return json.dumps(
         {
             "operation": "rotate",
+            "scope": "whole_image",
+            "parameters": {
+                "angle": angle,
+            },
             "image_base64": processed,
         }
     )
@@ -301,6 +344,10 @@ def flip_image(direction: str) -> str:
     return json.dumps(
         {
             "operation": "flip",
+            "scope": "whole_image",
+            "parameters": {
+                "direction": direction,
+            },
             "image_base64": processed,
         }
     )
@@ -324,6 +371,10 @@ def blur_image(radius: float = 2.0) -> str:
     return json.dumps(
         {
             "operation": "blur",
+            "scope": "whole_image",
+            "parameters": {
+                "radius": radius,
+            },
             "image_base64": processed,
         }
     )
@@ -348,6 +399,11 @@ def resize_image(width: int, height: int) -> str:
     return json.dumps(
         {
             "operation": "resize",
+            "scope": "whole_image",
+            "parameters": {
+                "width": width,
+                "height": height,
+            },
             "image_base64": processed,
         }
     )
@@ -374,6 +430,13 @@ def crop_image(left: int, top: int, right: int, bottom: int) -> str:
     return json.dumps(
         {
             "operation": "crop",
+            "scope": "whole_image",
+            "parameters": {
+                "left": left,
+                "top": top,
+                "right": right,
+                "bottom": bottom,
+            },
             "image_base64": processed,
         }
     )
@@ -397,6 +460,10 @@ def add_noise_image(amount: float = 0.05) -> str:
     return json.dumps(
         {
             "operation": "add_noise",
+            "scope": "whole_image",
+            "parameters": {
+                "amount": amount,
+            },
             "image_base64": processed,
         }
     )
@@ -409,11 +476,31 @@ def edit_detected_object(
     operation: str,
     angle: float = 90,
     radius: float = 2,
+    amount: float = 0.1,
 ) -> str:
-    """Edit a detected object in the uploaded image.
+    """Edit one detected object inside the uploaded image.
 
-    If the user said left or right, occurrence is counted visually from that side.
-    Returns JSON with image_base64.
+    Use this when the user asks to blur, rotate, flip, or add noise to a specific detected object,
+    such as "the first person", "the car on the right", or "the second dog from the left".
+
+    The tool detects objects with YOLO, selects the requested object, crops that object,
+    applies the requested image-processing operation only to that crop, pastes the edited crop
+    back into the original image, and returns the full edited image.
+
+    If operation is rotate, the rotated crop may change dimensions, so the edited crop is resized
+    back into the original object's bounding box before being pasted into the full image.
+
+    Arguments:
+    - object_label: YOLO label such as person, car, dog, cat, bicycle.
+    - occurrence: 1 for first/leftmost/rightmost depending on user wording, 2 for second, etc.
+    - operation: one of blur, rotate, flip, add_noise.
+    - angle: degrees for rotate.
+    - radius: blur radius for blur.
+    - amount: noise amount for add_noise.
+
+    Returns JSON with:
+    - operation: one of blur_object, rotate_object, flip_object, add_noise_object
+    - image_base64: full edited image as base64 PNG
     """
     image_b64 = _current_image_b64.get()
     if not image_b64:
@@ -480,7 +567,7 @@ def edit_detected_object(
             "add_noise",
             {
                 "image_b64": cropped_b64,
-                "amount": 0.1,
+                "amount": amount,
             },
         )
     else:
@@ -495,6 +582,24 @@ def edit_detected_object(
     return json.dumps(
         {
             "operation": f"{operation}_object",
+            "scope": "selected_object",
+            "target": {
+                "object_label": object_label,
+                "occurrence": occurrence,
+                "selection_text": _current_user_text.get(),
+                "matching_objects_found": len(sorted_detections),
+            },
+            "parameters": {
+                "angle": angle if operation == "rotate" else None,
+                "radius": radius if operation == "blur" else None,
+                "amount": amount if operation == "add_noise" else None,
+                "direction": "horizontal" if operation == "flip" else None,
+            },
+            "processing_note": (
+                "The edited crop was pasted back into the original image. "
+                "For rotate_object, the crop was resized back into the original "
+                "object bounding box after rotation."
+            ),
             "image_base64": final_image_b64,
         }
     )
@@ -569,18 +674,6 @@ def get_llm_with_tools():
     return llm_with_tools
 
 
-operation_messages = {
-    "rotate": "Rotated the image.",
-    "flip": "Flipped the image.",
-    "blur": "Blurred the image.",
-    "resize": "Resized the image.",
-    "crop": "Cropped the image.",
-    "add_noise": "Added noise to the image.",
-    "blur_object": "Blurred the selected object.",
-    "rotate_object": "Rotated the selected object.",
-    "flip_object": "Flipped the selected object.",
-    "add_noise_object": "Added noise to the selected object.",
-}
 
 
 ORDINAL_WORDS = {
@@ -724,37 +817,54 @@ def run_agent(history: list, max_iterations: int = 10):
 
             tool_fn = TOOLS[tool_call["name"]]
             tool_result = tool_fn.invoke(tool_call)
-            messages.append(tool_result)
 
             try:
                 data = json.loads(tool_result.content)
-
-                uid = data.get("uid") or data.get("prediction_uid")
-                if uid:
-                    prediction_id = uid
-                    annotated_image_url = f"/prediction/{uid}/image"
-
-                processed_image_b64 = data.get("image_base64")
-                if processed_image_b64:
-                    annotated_image = processed_image_b64
-                    operation = data.get("operation", "processed")
-                    return {
-                        "response": operation_messages.get(
-                            operation,
-                            "Processed the image.",
-                        ),
-                        "prediction_id": prediction_id,
-                        "annotated_image": annotated_image,
-                        "annotated_image_url": annotated_image_url,
-                        "agent_loop_time_s": round(time.time() - start_time, 2),
-                        "iterations": iterations,
-                        "tools_called": tools_called,
-                        "context_limit_exceeded": context_limit_exceeded,
-                        "tokens_used": tokens_used,
-                    }
-
             except Exception:
                 logging.exception("Failed to process tool response")
+                messages.append(tool_result)
+                continue
+
+            uid = data.get("uid") or data.get("prediction_uid")
+            if uid:
+                prediction_id = uid
+                annotated_image_url = f"/prediction/{uid}/image"
+
+            processed_image_b64 = data.get("image_base64")
+            if processed_image_b64:
+                annotated_image = None
+                annotated_image_url = _store_processed_image(processed_image_b64)
+                operation = data.get("operation", "processed")
+                sanitized_data = {
+                    key: value
+                    for key, value in data.items()
+                    if key != "image_base64"
+                }
+                sanitized_data.update(
+                    {
+                        "operation": operation,
+                        "status": "success",
+                        "image_returned": True,
+                        "result": (
+                            "The processed image was stored and will be "
+                            "displayed by the frontend."
+                        ),
+                        "response_guidance": (
+                            "Use these details to explain the edit naturally. "
+                            "Do not mention storage, URLs, base64, or internal IDs."
+                        ),
+                    }
+                )
+                sanitized_data = _remove_none_values(sanitized_data)
+                messages.append(
+                    ToolMessage(
+                        content=json.dumps(sanitized_data),
+                        tool_call_id=tool_call["id"],
+                    )
+                )
+                continue
+
+            messages.append(tool_result)
 
     return {
         "response": "The agent stopped because it reached the maximum number of iterations.",
@@ -834,21 +944,6 @@ def chat(request: ChatRequest):
     token = _current_image_b64.set(latest_image)
     text_token = _current_user_text.set(latest_user_text)
     try:
-        direct_edit_args = _extract_direct_edit(latest_user_text)
-        if latest_image and direct_edit_args is not None:
-            tool_result = edit_detected_object.invoke(direct_edit_args)
-            data = json.loads(tool_result)
-            operation = data.get("operation", "processed")
-            return ChatResponse(
-                response=operation_messages.get(operation, "Processed the image."),
-                annotated_image=data.get("image_base64"),
-                agent_loop_time_s=0.0,
-                iterations=1,
-                tools_called=[edit_detected_object.name],
-                context_limit_exceeded=False,
-                tokens_used=TokenUsage(),
-            )
-
         result = run_agent(lc_messages)
         return ChatResponse(**result)
     finally:
@@ -878,6 +973,19 @@ def get_prediction_image(uid: str):
 
     content_type = response.headers.get("content-type", "image/jpeg")
     return Response(content=response.content, media_type=content_type)
+
+
+@app.get("/processed/{image_id}/image")
+def get_processed_image(image_id: str):
+    """Proxy a processed MCP image stored by the agent in S3."""
+    key = f"processed/{image_id}/image.png"
+    try:
+        image_bytes = download_bytes_from_s3(key)
+    except Exception as error:
+        logging.exception("Failed to download processed image from S3")
+        raise HTTPException(status_code=404, detail="Image not found") from error
+
+    return Response(content=image_bytes, media_type="image/png")
 
 
 @app.get("/health")

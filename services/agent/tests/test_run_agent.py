@@ -6,7 +6,7 @@ import json
 import sys
 from pathlib import Path
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from PIL import Image
 
 AGENT_DIR = Path(__file__).resolve().parents[1]
@@ -94,6 +94,108 @@ def test_run_agent_calls_tool_and_returns_final_answer(monkeypatch):
     assert result["tools_called"] == ["detect_objects"]
     assert result["tokens_used"].total == 28
     assert result["context_limit_exceeded"] is False
+
+
+def test_run_agent_uploads_processed_tool_image(monkeypatch):
+    class ImageProcessingLLM:
+        def __init__(self):
+            self.calls = 0
+            self.second_call_messages = None
+
+        def invoke(self, messages):
+            self.calls += 1
+
+            if self.calls == 1:
+                return AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "rotate_image",
+                            "args": {"angle": 90},
+                            "id": "call_image",
+                        }
+                    ],
+                )
+
+            self.second_call_messages = messages
+            return AIMessage(
+                content="I rotated the image.",
+                response_metadata={},
+                usage_metadata={
+                    "input_tokens": 30,
+                    "output_tokens": 6,
+                    "total_tokens": 36,
+                },
+            )
+
+    class ImageProcessingTool:
+        def invoke(self, tool_call):
+            return type(
+                "FakeToolMessage",
+                (),
+                {
+                    "content": (
+                        '{"operation":"rotate",'
+                        '"scope":"whole_image",'
+                        '"parameters":{"angle":90},'
+                        '"image_base64":"cHJvY2Vzc2VkLWltYWdl"}'
+                    )
+                },
+            )()
+
+    captured = {}
+
+    def fake_upload_bytes_to_s3(data, key, content_type):
+        captured["upload"] = {
+            "data": data,
+            "key": key,
+            "content_type": content_type,
+        }
+        return key
+
+    fake_llm = ImageProcessingLLM()
+
+    monkeypatch.setattr(app, "llm_with_tools", fake_llm)
+    monkeypatch.setattr(app, "TOOLS", {"rotate_image": ImageProcessingTool()})
+    monkeypatch.setattr(app.uuid, "uuid4", lambda: "processed-image-id")
+    monkeypatch.setattr(app, "upload_bytes_to_s3", fake_upload_bytes_to_s3)
+
+    result = app.run_agent([HumanMessage(content="Rotate this image")])
+
+    assert result["response"] == "I rotated the image."
+    assert result["annotated_image"] is None
+    assert result["annotated_image_url"] == "/processed/processed-image-id/image"
+    assert result["iterations"] == 2
+    assert result["tokens_used"].total == 36
+    assert captured["upload"] == {
+        "data": b"processed-image",
+        "key": "processed/processed-image-id/image.png",
+        "content_type": "image/png",
+    }
+    tool_messages = [
+        message
+        for message in fake_llm.second_call_messages
+        if isinstance(message, ToolMessage)
+    ]
+    assert len(tool_messages) == 1
+    assert tool_messages[0].tool_call_id == "call_image"
+    sanitized = json.loads(tool_messages[0].content)
+    assert sanitized == {
+        "operation": "rotate",
+        "scope": "whole_image",
+        "parameters": {
+            "angle": 90,
+        },
+        "status": "success",
+        "image_returned": True,
+        "result": "The processed image was stored and will be displayed by the frontend.",
+        "response_guidance": (
+            "Use these details to explain the edit naturally. "
+            "Do not mention storage, URLs, base64, or internal IDs."
+        ),
+    }
+    assert "image_base64" not in tool_messages[0].content
+    assert "cHJvY2Vzc2VkLWltYWdl" not in tool_messages[0].content
 
 
 def test_run_agent_stops_at_max_iterations(monkeypatch):

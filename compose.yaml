@@ -1,9 +1,6 @@
 services:
   frontend:
-    build:
-      context: ./services/frontend
-      args:
-        NEXT_PUBLIC_AGENT_URL: "${NEXT_PUBLIC_AGENT_URL:-http://localhost:8000}"
+    image: "${FRONTEND_IMAGE:-polyai-fursa-frontend:latest}"
     ports:
       - "3000:3000"
     depends_on:
@@ -12,9 +9,7 @@ services:
       - polyai-net
 
   agent:
-    build:
-      context: .
-      dockerfile: services/agent/Dockerfile
+    image: "${AGENT_IMAGE:-polyai-fursa-agent:latest}"
     env_file:
       - ./services/agent/.env
     environment:
@@ -28,8 +23,7 @@ services:
       - polyai-net
 
   yolo:
-    build:
-      context: ./services/yolo
+    image: "${YOLO_IMAGE:-polyai-fursa-yolo:latest}"
     env_file:
       - ./services/agent/.env
     environment:
