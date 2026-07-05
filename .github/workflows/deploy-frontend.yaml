@@ -33,6 +33,8 @@ jobs:
           context: services/frontend
           push: true
           tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          build-args: |
+            NEXT_PUBLIC_AGENT_URL=${{ github.ref_name == 'dev' && 'http://dev.ahmad.fursa.click:8000' || 'http://prod.ahmad.fursa.click:8000' }}
 
       - name: Deploy frontend to EC2
         uses: appleboy/ssh-action@v1
