@@ -12,11 +12,8 @@ import uuid
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Optional
-
 from dotenv import load_dotenv
-
 load_dotenv()
-
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,7 +26,6 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from PIL import Image
 from pydantic import BaseModel
-
 from s3_utils import download_bytes_from_s3, upload_bytes_to_s3
 
 logging.basicConfig(
@@ -672,77 +668,6 @@ def get_llm_with_tools():
 
     llm_with_tools = llm.bind_tools(list(TOOLS.values()))
     return llm_with_tools
-
-
-
-
-ORDINAL_WORDS = {
-    "first": 1,
-    "1st": 1,
-    "second": 2,
-    "2nd": 2,
-    "third": 3,
-    "3rd": 3,
-    "fourth": 4,
-    "4th": 4,
-    "fifth": 5,
-    "5th": 5,
-}
-
-
-def _extract_occurrence(text: str) -> int:
-    normalized = text.lower()
-    for word, value in ORDINAL_WORDS.items():
-        if re.search(rf"\b{re.escape(word)}\b", normalized):
-            return value
-    return 1
-
-
-def _extract_object_label(text: str) -> Optional[str]:
-    normalized = text.lower()
-    known_labels = ["person", "car", "bus", "truck", "dog", "cat", "bicycle"]
-    for label in known_labels:
-        if re.search(rf"\b{label}s?\b", normalized):
-            return label
-    return None
-
-
-def _extract_direct_edit(text: str) -> Optional[dict[str, Any]]:
-    normalized = text.lower()
-
-    if "blur" in normalized:
-        operation = "blur"
-    elif "rotate" in normalized:
-        operation = "rotate"
-    elif "flip" in normalized:
-        operation = "flip"
-    elif "noise" in normalized:
-        operation = "add_noise"
-    else:
-        return None
-
-    object_label = _extract_object_label(normalized)
-    if object_label is None:
-        return None
-
-    edit_args: dict[str, Any] = {
-        "object_label": object_label,
-        "occurrence": _extract_occurrence(normalized),
-        "operation": operation,
-    }
-
-    if operation == "rotate":
-        angle_match = re.search(r"\b(\d+(?:\.\d+)?)\b", normalized)
-        if angle_match:
-            edit_args["angle"] = float(angle_match.group(1))
-
-    if operation == "blur":
-        radius_match = re.search(r"\b(?:radius|blur)\s+(\d+(?:\.\d+)?)\b", normalized)
-        if radius_match:
-            edit_args["radius"] = float(radius_match.group(1))
-
-    return edit_args
-
 
 class TokenUsage(BaseModel):
     input: int = 0
