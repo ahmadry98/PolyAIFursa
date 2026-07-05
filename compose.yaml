@@ -1,6 +1,6 @@
 services:
   frontend:
-    image: "${FRONTEND_IMAGE:-polyai-fursa-frontend:latest}"
+    image: "${FRONTEND_IMAGE}:${FRONTEND_IMAGE_TAG}"
     ports:
       - "3000:3000"
     depends_on:
@@ -9,27 +9,35 @@ services:
       - polyai-net
 
   agent:
-    image: "${AGENT_IMAGE:-polyai-fursa-agent:latest}"
+    image: "${AGENT_IMAGE}:${AGENT_IMAGE_TAG}"
     env_file:
       - ./services/agent/.env
     environment:
       YOLO_SERVICE_URL: http://yolo:8080
+      IMG_PROC_MCP_URL: http://img-proc-mcp:9000
       AWS_REGION: "${AWS_REGION:-us-east-1}"
     ports:
       - "8000:8000"
     depends_on:
       - yolo
+      - img-proc-mcp
     networks:
       - polyai-net
 
   yolo:
-    image: "${YOLO_IMAGE:-polyai-fursa-yolo:latest}"
+    image: "${YOLO_IMAGE}:${YOLO_IMAGE_TAG}"
     env_file:
       - ./services/agent/.env
     environment:
       AWS_REGION: "${AWS_REGION:-us-east-1}"
     networks:
       - polyai-net
+  img-proc-mcp:
+    image: "${IMG_PROC_MCP_IMAGE}:${IMG_PROC_MCP_IMAGE_TAG}"
+    ports:
+      - "9000:9000"
+    networks:
+      - polyai-net 
   node-exporter:
     image: prom/node-exporter
     ports:

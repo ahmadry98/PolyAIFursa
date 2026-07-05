@@ -6,7 +6,7 @@ from typing import Literal
 from mcp.server.fastmcp import FastMCP
 from PIL import Image, ImageFilter
 
-mcp = FastMCP("img-proc")
+mcp = FastMCP("img-proc", host="0.0.0.0", port=9000)
 
 
 def _decode(image_b64: str) -> Image.Image:
@@ -85,4 +85,4 @@ def add_noise(image_b64: str, amount: float = 0.05) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run(transport="streamable-http")

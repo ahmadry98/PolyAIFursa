@@ -1,6 +1,5 @@
 import logging
 import os
-from pathlib import Path
 
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
@@ -16,10 +15,7 @@ logging.getLogger("langchain").setLevel(logging.DEBUG)
 logging.getLogger("langchain_core").setLevel(logging.DEBUG)
 
 YOLO_SERVICE_URL = os.environ.get("YOLO_SERVICE_URL", "http://localhost:8080")
-IMG_PROC_MCP_SCRIPT = os.environ.get(
-    "IMG_PROC_MCP_SCRIPT",
-    str(Path(__file__).resolve().parents[1] / "img-proc-mcp" / "img_proc_app.py"),
-)
+IMG_PROC_MCP_URL = os.environ.get("IMG_PROC_MCP_URL", "http://localhost:9000")
 MODEL = os.environ.get("MODEL")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 
@@ -42,11 +38,11 @@ SYSTEM_PROMPT = (
     "Report object counts exactly as provided in label_counts. "
     "For whole-image requests that ask to rotate, flip, blur, resize, crop, "
     "or add noise, use the matching whole-image processing tool. "
-    "For object-specific edit requests, use edit_detected_object. "
+    "For object-specific edit or crop requests, use edit_detected_object. "
     "If the user says 'person on the left' or 'person on the right', call "
     'edit_detected_object with object_label="person", occurrence=1, and the '
     "operation that matches the requested edit. "
-    "Do not refuse blur, rotate, flip, or add_noise requests on detected objects. "
+    "Do not refuse blur, rotate, flip, crop, or add_noise requests on detected objects. "
     "After an image-processing tool succeeds, write a helpful 2-3 sentence "
     "explanation using the sanitized tool result details. Mention the edit, "
     "target or scope, and important parameters such as angle, blur radius, "

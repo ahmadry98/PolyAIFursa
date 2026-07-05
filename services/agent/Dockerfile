@@ -7,17 +7,14 @@ ENV PIP_NO_CACHE_DIR=1
 WORKDIR /app
 
 COPY services/agent/requirements.txt ./requirements.txt
-COPY services/img-proc-mcp/requirements.txt /tmp/img-proc-requirements.txt
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt \
-    && pip install -r /tmp/img-proc-requirements.txt \
     && addgroup --system app \
     && adduser --system --ingroup app app
 
 COPY services/agent/*.py ./
-COPY services/img-proc-mcp/img_proc_app.py /img-proc-mcp/img_proc_app.py
 
-RUN chown -R app:app /app /img-proc-mcp
+RUN chown -R app:app /app
 
 USER app
 
