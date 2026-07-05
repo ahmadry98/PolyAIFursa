@@ -4,13 +4,10 @@ on:
   push:
     branches:
       - dev
-  pull_request:
-    branches:
       - main
 
 jobs:
   docker-scout:
-    if: github.event_name == 'push' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -18,13 +15,20 @@ jobs:
         service:
           - name: yolo
             context: ./services/yolo
-            image: yolo-service
+            dockerfile: ./services/yolo/Dockerfile
+            image: polyai-fursa-yolo
           - name: agent
-            context: ./services/agent
-            image: agent-service
+            context: .
+            dockerfile: ./services/agent/Dockerfile
+            image: polyai-fursa-agent
           - name: frontend
             context: ./services/frontend
-            image: frontend-service
+            dockerfile: ./services/frontend/Dockerfile
+            image: polyai-fursa-frontend
+          - name: img-proc-mcp
+            context: ./services/img-proc-mcp
+            dockerfile: ./services/img-proc-mcp/Dockerfile
+            image: polyai-fursa-img-proc-mcp
 
     steps:
       - name: Checkout code
@@ -40,15 +44,16 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
           push: false
           load: true
-          tags: ${{ matrix.service.image }}:scout
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.service.image }}:${{ github.sha }}-scout
 
       - name: Docker Scout scan ${{ matrix.service.name }}
         uses: docker/scout-action@v1
         with:
           command: cves
-          image: ${{ matrix.service.image }}:scout
+          image: ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.service.image }}:${{ github.sha }}-scout
           only-severities: critical,high
           only-fixed: true
           exit-code: true
