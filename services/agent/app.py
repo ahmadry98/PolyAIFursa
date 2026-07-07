@@ -10,7 +10,7 @@ from agent_runner import run_agent
 from config import YOLO_SERVICE_URL
 from s3_utils import download_bytes_from_s3
 from schemas import ChatRequest, ChatResponse
-from tools import _current_image_b64, _current_user_text
+from tools import _current_image_b64, _current_user_text, _working_image_b64
 
 app = FastAPI(title="Vision Agent")
 
@@ -53,12 +53,14 @@ def chat(request: ChatRequest):
             lc_messages.append(AIMessage(content=msg.content))
 
     token = _current_image_b64.set(latest_image)
+    working_token = _working_image_b64.set(latest_image)
     text_token = _current_user_text.set(latest_user_text)
     try:
         result = run_agent(lc_messages)
         return ChatResponse(**result)
     finally:
         _current_image_b64.reset(token)
+        _working_image_b64.reset(working_token)
         _current_user_text.reset(text_token)
 
 

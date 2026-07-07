@@ -422,3 +422,220 @@ def test_edit_detected_object_can_crop_selected_object(monkeypatch):
     assert result["scope"] == "selected_object"
     assert result["parameters"]["box"] == [50, 10, 65, 100]
     assert cropped.size == (15, 90)
+
+
+def test_plan_image_edits_extracts_multiple_noise_operations():
+    plan = tools.plan_image_edits(
+        "add 0.5 noise to the right person and 0.9 noise to the left person"
+    )
+
+    assert plan == [
+        {
+            "tool": "add_noise",
+            "target": "add 0.5 noise to the right person",
+            "selection_text": "add 0.5 noise to the right person",
+            "object_label": "person",
+            "occurrence": 1,
+            "amount": 0.5,
+        },
+        {
+            "tool": "add_noise",
+            "target": "0.9 noise to the left person",
+            "selection_text": "0.9 noise to the left person",
+            "object_label": "person",
+            "occurrence": 1,
+            "amount": 0.9,
+        },
+    ]
+
+
+def test_run_agent_applies_multiple_independent_object_edits(monkeypatch):
+    image = Image.new("RGB", (80, 40), "white")
+    image_buffer = io.BytesIO()
+    image.save(image_buffer, format="PNG")
+    image_b64 = base64.b64encode(image_buffer.getvalue()).decode()
+    stored = {}
+
+    def fake_detect_uploaded_image(_image_b64):
+        return {
+            "detection_objects": [
+                {"label": "person", "box": [5, 5, 25, 30]},
+                {"label": "person", "box": [55, 5, 75, 30]},
+            ]
+        }
+
+    def fake_run_img_proc_mcp(tool_name, arguments):
+        assert tool_name == "add_noise"
+        crop = Image.open(
+            io.BytesIO(base64.b64decode(arguments["image_b64"]))
+        ).convert("RGB")
+        color = "black" if arguments["amount"] == 0.5 else "gray"
+        return image_utils._encode_image(Image.new("RGB", crop.size, color))
+
+    def fake_store_processed_image(image_base64):
+        stored["image_base64"] = image_base64
+        return "/processed/final/image"
+
+    monkeypatch.setattr(tools, "_detect_uploaded_image", fake_detect_uploaded_image)
+    monkeypatch.setattr(tools, "_run_img_proc_mcp", fake_run_img_proc_mcp)
+    monkeypatch.setattr(
+        agent_runner,
+        "_store_processed_image",
+        fake_store_processed_image,
+    )
+
+    image_token = tools._current_image_b64.set(image_b64)
+    working_token = tools._working_image_b64.set(image_b64)
+    text_token = tools._current_user_text.set(
+        "add 0.5 noise to the right person and 0.9 noise to the left person"
+    )
+    try:
+        result = agent_runner.run_agent(
+            [
+                HumanMessage(
+                    content=(
+                        "add 0.5 noise to the right person and 0.9 noise "
+                        "to the left person"
+                    )
+                )
+            ]
+        )
+    finally:
+        tools._current_image_b64.reset(image_token)
+        tools._working_image_b64.reset(working_token)
+        tools._current_user_text.reset(text_token)
+
+    final_image = Image.open(
+        io.BytesIO(base64.b64decode(stored["image_base64"]))
+    ).convert("RGB")
+
+    assert result["annotated_image_url"] == "/processed/final/image"
+    assert result["tools_called"] == ["apply_image_edit_plan"]
+    assert final_image.getpixel((65, 10)) == (0, 0, 0)
+    assert final_image.getpixel((10, 10)) == (128, 128, 128)
+    assert final_image.getpixel((40, 10)) == (255, 255, 255)
+
+
+def test_run_agent_can_mix_blur_and_draw_box_object_edits(monkeypatch):
+    image = Image.new("RGB", (90, 50), "white")
+    image_buffer = io.BytesIO()
+    image.save(image_buffer, format="PNG")
+    image_b64 = base64.b64encode(image_buffer.getvalue()).decode()
+    stored = {}
+
+    def fake_detect_uploaded_image(_image_b64):
+        return {
+            "detection_objects": [
+                {"label": "person", "box": [5, 5, 25, 35]},
+                {"label": "car", "box": [50, 10, 80, 35]},
+            ]
+        }
+
+    def fake_run_img_proc_mcp(tool_name, arguments):
+        assert tool_name == "blur"
+        crop = Image.open(
+            io.BytesIO(base64.b64decode(arguments["image_b64"]))
+        ).convert("RGB")
+        return image_utils._encode_image(Image.new("RGB", crop.size, "black"))
+
+    def fake_store_processed_image(image_base64):
+        stored["image_base64"] = image_base64
+        return "/processed/box/image"
+
+    monkeypatch.setattr(tools, "_detect_uploaded_image", fake_detect_uploaded_image)
+    monkeypatch.setattr(tools, "_run_img_proc_mcp", fake_run_img_proc_mcp)
+    monkeypatch.setattr(
+        agent_runner,
+        "_store_processed_image",
+        fake_store_processed_image,
+    )
+
+    image_token = tools._current_image_b64.set(image_b64)
+    working_token = tools._working_image_b64.set(image_b64)
+    text_token = tools._current_user_text.set(
+        "blur the left person and draw a red box around the car"
+    )
+    try:
+        result = agent_runner.run_agent(
+            [
+                HumanMessage(
+                    content="blur the left person and draw a red box around the car"
+                )
+            ]
+        )
+    finally:
+        tools._current_image_b64.reset(image_token)
+        tools._working_image_b64.reset(working_token)
+        tools._current_user_text.reset(text_token)
+
+    final_image = Image.open(
+        io.BytesIO(base64.b64decode(stored["image_base64"]))
+    ).convert("RGB")
+
+    assert result["annotated_image_url"] == "/processed/box/image"
+    assert final_image.getpixel((10, 10)) == (0, 0, 0)
+    assert final_image.getpixel((50, 10)) == (255, 0, 0)
+
+
+def test_run_agent_applies_sequential_object_then_whole_image_edit(monkeypatch):
+    image = Image.new("RGB", (60, 40), "white")
+    image_buffer = io.BytesIO()
+    image.save(image_buffer, format="PNG")
+    image_b64 = base64.b64encode(image_buffer.getvalue()).decode()
+    stored = {}
+    rotate_input = {}
+
+    def fake_detect_uploaded_image(_image_b64):
+        return {
+            "detection_objects": [
+                {"label": "dog", "box": [5, 5, 25, 25]},
+            ]
+        }
+
+    def fake_run_img_proc_mcp(tool_name, arguments):
+        input_image = Image.open(
+            io.BytesIO(base64.b64decode(arguments["image_b64"]))
+        ).convert("RGB")
+
+        if tool_name == "add_noise":
+            noisy_image = Image.new("RGB", input_image.size, "black")
+            return image_utils._encode_image(noisy_image)
+
+        assert tool_name == "rotate"
+        rotate_input["pixel_after_first_edit"] = input_image.getpixel((10, 10))
+        rotated = input_image.rotate(arguments["angle"], expand=True)
+        return image_utils._encode_image(rotated)
+
+    def fake_store_processed_image(image_base64):
+        stored["image_base64"] = image_base64
+        return "/processed/sequential/image"
+
+    monkeypatch.setattr(tools, "_detect_uploaded_image", fake_detect_uploaded_image)
+    monkeypatch.setattr(tools, "_run_img_proc_mcp", fake_run_img_proc_mcp)
+    monkeypatch.setattr(
+        agent_runner,
+        "_store_processed_image",
+        fake_store_processed_image,
+    )
+
+    image_token = tools._current_image_b64.set(image_b64)
+    working_token = tools._working_image_b64.set(image_b64)
+    text_token = tools._current_user_text.set(
+        "add noise to the dog, then rotate the whole image"
+    )
+    try:
+        result = agent_runner.run_agent(
+            [HumanMessage(content="add noise to the dog, then rotate the whole image")]
+        )
+    finally:
+        tools._current_image_b64.reset(image_token)
+        tools._working_image_b64.reset(working_token)
+        tools._current_user_text.reset(text_token)
+
+    final_image = Image.open(
+        io.BytesIO(base64.b64decode(stored["image_base64"]))
+    ).convert("RGB")
+
+    assert result["annotated_image_url"] == "/processed/sequential/image"
+    assert rotate_input["pixel_after_first_edit"] == (0, 0, 0)
+    assert final_image.size == (40, 60)

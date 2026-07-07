@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 from contextvars import ContextVar
 from typing import Any, Optional
 from urllib.parse import urlparse, urlunparse
@@ -8,12 +9,14 @@ from urllib.parse import urlparse, urlunparse
 from langchain_core.tools import tool
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
+from PIL import ImageDraw
 
 from config import IMG_PROC_MCP_URL
 from image_utils import (
     _compact_detection_result,
     _crop_region,
     _detect_uploaded_image,
+    _decode_image,
     _encode_image,
     _paste_region,
     _sort_detections_horizontally,
@@ -23,7 +26,45 @@ _current_image_b64: ContextVar[Optional[str]] = ContextVar(
     "current_image_b64",
     default=None,
 )
+_working_image_b64: ContextVar[Optional[str]] = ContextVar(
+    "working_image_b64",
+    default=None,
+)
 _current_user_text: ContextVar[str] = ContextVar("current_user_text", default="")
+
+OBJECT_LABELS = [
+    "person",
+    "car",
+    "dog",
+    "cat",
+    "bicycle",
+    "bus",
+    "truck",
+    "bird",
+    "horse",
+    "sheep",
+    "cow",
+    "chair",
+    "table",
+    "bottle",
+    "cup",
+]
+
+ORDINAL_WORDS = {
+    "first": 1,
+    "second": 2,
+    "third": 3,
+    "fourth": 4,
+    "fifth": 5,
+}
+
+
+def _get_image_b64() -> Optional[str]:
+    return _working_image_b64.get() or _current_image_b64.get()
+
+
+def _set_working_image_b64(image_b64: str) -> None:
+    _working_image_b64.set(image_b64)
 
 
 def _img_proc_mcp_endpoint() -> str:
@@ -58,7 +99,7 @@ def _run_img_proc_mcp(tool_name: str, arguments: dict[str, Any]) -> str:
 @tool
 def detect_objects() -> str:
     """Detect and identify objects in the image provided by the user using YOLO object detection."""
-    image_b64 = _current_image_b64.get()
+    image_b64 = _get_image_b64()
     if not image_b64:
         return json.dumps({"error": "No image was provided by the user."})
 
@@ -78,7 +119,7 @@ def detect_objects() -> str:
 @tool
 def rotate_image(angle: float) -> str:
     """Rotate the uploaded image by angle degrees. Returns JSON with image_base64."""
-    image_b64 = _current_image_b64.get()
+    image_b64 = _get_image_b64()
     if not image_b64:
         return json.dumps({"error": "No image was provided by the user."})
 
@@ -89,6 +130,7 @@ def rotate_image(angle: float) -> str:
             "angle": angle,
         },
     )
+    _set_working_image_b64(processed)
 
     return json.dumps(
         {
@@ -105,7 +147,7 @@ def rotate_image(angle: float) -> str:
 @tool
 def flip_image(direction: str) -> str:
     """Flip the uploaded image. direction must be horizontal or vertical. Returns JSON with image_base64."""
-    image_b64 = _current_image_b64.get()
+    image_b64 = _get_image_b64()
     if not image_b64:
         return json.dumps({"error": "No image was provided by the user."})
 
@@ -116,6 +158,7 @@ def flip_image(direction: str) -> str:
             "direction": direction,
         },
     )
+    _set_working_image_b64(processed)
 
     return json.dumps(
         {
@@ -132,7 +175,7 @@ def flip_image(direction: str) -> str:
 @tool
 def blur_image(radius: float = 2.0) -> str:
     """Blur the uploaded image. Returns JSON with image_base64."""
-    image_b64 = _current_image_b64.get()
+    image_b64 = _get_image_b64()
     if not image_b64:
         return json.dumps({"error": "No image was provided by the user."})
 
@@ -143,6 +186,7 @@ def blur_image(radius: float = 2.0) -> str:
             "radius": radius,
         },
     )
+    _set_working_image_b64(processed)
 
     return json.dumps(
         {
@@ -159,7 +203,7 @@ def blur_image(radius: float = 2.0) -> str:
 @tool
 def resize_image(width: int, height: int) -> str:
     """Resize the uploaded image to width x height. Returns JSON with image_base64."""
-    image_b64 = _current_image_b64.get()
+    image_b64 = _get_image_b64()
     if not image_b64:
         return json.dumps({"error": "No image was provided by the user."})
 
@@ -171,6 +215,7 @@ def resize_image(width: int, height: int) -> str:
             "height": height,
         },
     )
+    _set_working_image_b64(processed)
 
     return json.dumps(
         {
@@ -188,7 +233,7 @@ def resize_image(width: int, height: int) -> str:
 @tool
 def crop_image(left: float, top: float, right: float, bottom: float) -> str:
     """Crop the uploaded image using bounding box coordinates. Returns JSON with image_base64."""
-    image_b64 = _current_image_b64.get()
+    image_b64 = _get_image_b64()
     if not image_b64:
         return json.dumps({"error": "No image was provided by the user."})
 
@@ -206,6 +251,7 @@ def crop_image(left: float, top: float, right: float, bottom: float) -> str:
             **crop_box,
         },
     )
+    _set_working_image_b64(processed)
 
     return json.dumps(
         {
@@ -220,7 +266,7 @@ def crop_image(left: float, top: float, right: float, bottom: float) -> str:
 @tool
 def add_noise_image(amount: float = 0.05) -> str:
     """Add salt-and-pepper noise to the uploaded image. Amount should be between 0 and 1."""
-    image_b64 = _current_image_b64.get()
+    image_b64 = _get_image_b64()
     if not image_b64:
         return json.dumps({"error": "No image was provided by the user."})
 
@@ -231,6 +277,7 @@ def add_noise_image(amount: float = 0.05) -> str:
             "amount": amount,
         },
     )
+    _set_working_image_b64(processed)
 
     return json.dumps(
         {
@@ -278,7 +325,7 @@ def edit_detected_object(
     - operation: one of blur_object, rotate_object, flip_object, crop_object, add_noise_object
     - image_base64: full edited image or selected object crop as base64 PNG
     """
-    image_b64 = _current_image_b64.get()
+    image_b64 = _get_image_b64()
     if not image_b64:
         return json.dumps({"error": "No image was provided by the user."})
 
@@ -358,6 +405,8 @@ def edit_detected_object(
     if operation != "crop":
         final_image_b64 = _paste_region(image_b64, processed_crop_b64, safe_box)
 
+    _set_working_image_b64(final_image_b64)
+
     return json.dumps(
         {
             "operation": f"{operation}_object",
@@ -386,6 +435,271 @@ def edit_detected_object(
     )
 
 
+def _split_edit_request(user_text: str) -> list[str]:
+    parts = re.split(r"\b(?:and|then)\b", user_text, flags=re.IGNORECASE)
+    return [part.strip(" ,.") for part in parts if part.strip(" ,.")]
+
+
+def _parse_occurrence(text: str) -> int:
+    normalized = text.lower()
+    for word, value in ORDINAL_WORDS.items():
+        if word in normalized:
+            return value
+
+    match = re.search(r"\b(\d+)(?:st|nd|rd|th)\b", normalized)
+    if match:
+        return int(match.group(1))
+
+    return 1
+
+
+def _parse_object_label(text: str) -> Optional[str]:
+    normalized = text.lower()
+    for label in OBJECT_LABELS:
+        if re.search(rf"\b{re.escape(label)}s?\b", normalized):
+            return label
+    return None
+
+
+def _parse_number(text: str) -> Optional[float]:
+    match = re.search(r"\b\d+(?:\.\d+)?\b", text)
+    if not match:
+        return None
+    return float(match.group(0))
+
+
+def _parse_edit_part(
+    part: str,
+    previous_tool: Optional[str],
+) -> Optional[dict[str, Any]]:
+    normalized = part.lower()
+    tool_name = None
+
+    if "noise" in normalized:
+        tool_name = "add_noise"
+    elif "blur" in normalized:
+        tool_name = "blur"
+    elif "rotate" in normalized:
+        tool_name = "rotate"
+    elif "flip" in normalized:
+        tool_name = "flip"
+    elif "crop" in normalized:
+        tool_name = "crop"
+    elif "box" in normalized or "rectangle" in normalized:
+        tool_name = "draw_box"
+    elif previous_tool and _parse_number(normalized) is not None:
+        tool_name = previous_tool
+
+    if tool_name is None:
+        return None
+
+    number = _parse_number(normalized)
+    object_label = _parse_object_label(normalized)
+    targets_whole_image = (
+        object_label is None
+        and ("whole image" in normalized or "entire image" in normalized)
+    )
+
+    operation: dict[str, Any] = {
+        "tool": tool_name,
+        "target": "whole image" if targets_whole_image else part,
+        "selection_text": part,
+    }
+
+    if object_label is not None:
+        operation["object_label"] = object_label
+        operation["occurrence"] = _parse_occurrence(normalized)
+
+    if tool_name == "add_noise":
+        operation["amount"] = number if number is not None else 0.05
+    elif tool_name == "blur":
+        operation["radius"] = number if number is not None else 2.0
+    elif tool_name == "rotate":
+        operation["angle"] = number if number is not None else 90
+    elif tool_name == "flip":
+        if "vertical" in normalized:
+            operation["direction"] = "vertical"
+        else:
+            operation["direction"] = "horizontal"
+    elif tool_name == "draw_box":
+        operation["color"] = "red" if "red" in normalized else "yellow"
+
+    return operation
+
+
+def plan_image_edits(user_text: str) -> list[dict[str, Any]]:
+    """Build a small ordered edit plan from a natural-language request."""
+    operations = []
+    previous_tool = None
+
+    for part in _split_edit_request(user_text):
+        operation = _parse_edit_part(part, previous_tool)
+        if operation is None:
+            continue
+        operations.append(operation)
+        previous_tool = operation["tool"]
+
+    return operations
+
+
+def _select_detection(
+    detections: list[dict[str, Any]],
+    object_label: str,
+    occurrence: int,
+    selection_text: str,
+) -> Optional[dict[str, Any]]:
+    matches = [
+        detection
+        for detection in detections
+        if detection.get("label") == object_label
+    ]
+    sorted_matches = _sort_detections_horizontally(matches, selection_text)
+    if len(sorted_matches) < occurrence:
+        return None
+    return sorted_matches[occurrence - 1]
+
+
+def _draw_box(image_b64: str, box: list[float], color: str) -> str:
+    img = _decode_image(image_b64)
+    left, top, right, bottom = [int(value) for value in box]
+    draw = ImageDraw.Draw(img)
+    for offset in range(3):
+        draw.rectangle(
+            [left - offset, top - offset, right + offset, bottom + offset],
+            outline=color,
+        )
+    return _encode_image(img)
+
+
+def _execute_whole_image_edit(image_b64: str, operation: dict[str, Any]) -> str:
+    tool_name = operation["tool"]
+
+    if tool_name == "add_noise":
+        return _run_img_proc_mcp(
+            "add_noise",
+            {"image_b64": image_b64, "amount": operation.get("amount", 0.05)},
+        )
+    if tool_name == "blur":
+        return _run_img_proc_mcp(
+            "blur",
+            {"image_b64": image_b64, "radius": operation.get("radius", 2.0)},
+        )
+    if tool_name == "rotate":
+        return _run_img_proc_mcp(
+            "rotate",
+            {"image_b64": image_b64, "angle": operation.get("angle", 90)},
+        )
+    if tool_name == "flip":
+        return _run_img_proc_mcp(
+            "flip",
+            {
+                "image_b64": image_b64,
+                "direction": operation.get("direction", "horizontal"),
+            },
+        )
+
+    return image_b64
+
+
+def _execute_object_edit(
+    image_b64: str,
+    operation: dict[str, Any],
+    detections: list[dict[str, Any]],
+) -> tuple[str, Optional[str]]:
+    target = _select_detection(
+        detections,
+        operation["object_label"],
+        operation.get("occurrence", 1),
+        operation.get("selection_text", ""),
+    )
+    if target is None:
+        return image_b64, f"Could not find target: {operation['target']}"
+
+    if operation["tool"] == "draw_box":
+        boxed_image_b64 = _draw_box(
+            image_b64,
+            target["box"],
+            operation.get("color", "yellow"),
+        )
+        return boxed_image_b64, None
+
+    cropped_img, safe_box = _crop_region(image_b64, target["box"])
+    cropped_b64 = _encode_image(cropped_img)
+    processed_crop_b64 = _execute_whole_image_edit(cropped_b64, operation)
+    return _paste_region(image_b64, processed_crop_b64, safe_box), None
+
+
+def execute_image_edit_plan(operations: list[dict[str, Any]]) -> dict[str, Any]:
+    image_b64 = _get_image_b64()
+    if not image_b64:
+        return {"error": "No image was provided by the user."}
+
+    working_image_b64 = image_b64
+    detections = None
+    errors = []
+
+    for operation in operations:
+        if operation.get("object_label"):
+            if detections is None:
+                try:
+                    prediction = _detect_uploaded_image(working_image_b64)
+                    detections = prediction.get("detection_objects", [])
+                except ValueError as error:
+                    return {"error": str(error)}
+                except Exception:
+                    logging.exception("Object detection request failed")
+                    return {
+                        "error": (
+                            "The object detection service could not process the image."
+                        )
+                    }
+
+            working_image_b64, error = _execute_object_edit(
+                working_image_b64,
+                operation,
+                detections,
+            )
+            if error:
+                errors.append(error)
+        else:
+            working_image_b64 = _execute_whole_image_edit(working_image_b64, operation)
+            if operation["tool"] in {"rotate", "flip", "resize", "crop"}:
+                detections = None
+
+        _set_working_image_b64(working_image_b64)
+
+    return {
+        "operation": "multi_edit",
+        "scope": "sequential_edits",
+        "operations": operations,
+        "errors": errors,
+        "image_base64": working_image_b64,
+    }
+
+
+def run_multi_edit_request() -> Optional[dict[str, Any]]:
+    user_text = _current_user_text.get()
+    if not _get_image_b64() or not user_text:
+        return None
+
+    operations = plan_image_edits(user_text)
+    if len(operations) < 2:
+        return None
+
+    return execute_image_edit_plan(operations)
+
+
+@tool
+def apply_image_edit_plan() -> str:
+    """Parse and execute multiple image edits from the user's current message."""
+    result = run_multi_edit_request()
+    if result is None:
+        return json.dumps(
+            {"error": "Could not find multiple image-edit operations to run."}
+        )
+    return json.dumps(result)
+
+
 # Registry: map tool name -> tool function.
 TOOLS = {
     detect_objects.name: detect_objects,
@@ -396,4 +710,5 @@ TOOLS = {
     crop_image.name: crop_image,
     add_noise_image.name: add_noise_image,
     edit_detected_object.name: edit_detected_object,
+    apply_image_edit_plan.name: apply_image_edit_plan,
 }
