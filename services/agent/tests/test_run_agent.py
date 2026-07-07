@@ -449,6 +449,41 @@ def test_plan_image_edits_extracts_multiple_noise_operations():
     ]
 
 
+def test_plan_image_edits_accepts_multiline_commands():
+    plan = tools.plan_image_edits(
+        """
+        - add 0.5 noise to the right person
+        - 0.9 noise to the left person
+        then rotate the whole image
+        """
+    )
+
+    assert plan == [
+        {
+            "tool": "add_noise",
+            "target": "add 0.5 noise to the right person",
+            "selection_text": "add 0.5 noise to the right person",
+            "object_label": "person",
+            "occurrence": 1,
+            "amount": 0.5,
+        },
+        {
+            "tool": "add_noise",
+            "target": "0.9 noise to the left person",
+            "selection_text": "0.9 noise to the left person",
+            "object_label": "person",
+            "occurrence": 1,
+            "amount": 0.9,
+        },
+        {
+            "tool": "rotate",
+            "target": "whole image",
+            "selection_text": "rotate the whole image",
+            "angle": 90,
+        },
+    ]
+
+
 def test_run_agent_applies_multiple_independent_object_edits(monkeypatch):
     image = Image.new("RGB", (80, 40), "white")
     image_buffer = io.BytesIO()

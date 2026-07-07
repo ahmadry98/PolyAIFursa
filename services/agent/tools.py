@@ -435,9 +435,20 @@ def edit_detected_object(
     )
 
 
+def _clean_edit_part(part: str) -> str:
+    cleaned = part.strip(" ,.")
+    cleaned = re.sub(r"^\s*(?:[-*]|\d+[.)])\s+", "", cleaned)
+    return cleaned.strip(" ,.")
+
+
 def _split_edit_request(user_text: str) -> list[str]:
-    parts = re.split(r"\b(?:and|then)\b", user_text, flags=re.IGNORECASE)
-    return [part.strip(" ,.") for part in parts if part.strip(" ,.")]
+    parts = re.split(
+        r"(?:\r?\n+|;|\b(?:and|then)\b)",
+        user_text,
+        flags=re.IGNORECASE,
+    )
+    cleaned_parts = [_clean_edit_part(part) for part in parts]
+    return [part for part in cleaned_parts if part]
 
 
 def _parse_occurrence(text: str) -> int:
