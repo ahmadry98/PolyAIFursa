@@ -1,4 +1,5 @@
 FROM node:20-trixie-slim AS deps
+RUN npm install -g npm@latest
 
 WORKDIR /app
 
@@ -6,6 +7,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 FROM node:20-trixie-slim AS builder
+RUN npm install -g npm@latest
 
 WORKDIR /app
 
@@ -18,9 +20,11 @@ ENV NEXT_PUBLIC_AGENT_URL=$NEXT_PUBLIC_AGENT_URL
 RUN npm run build
 
 FROM node:20-trixie-slim AS runner
-RUN apt-get update \
+RUN npm install -g npm@latest \
+    && apt-get update \
     && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV HOSTNAME=0.0.0.0
