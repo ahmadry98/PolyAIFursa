@@ -3,12 +3,16 @@ name: Deploy PolyAI
 on:
   push:
     branches:
-      - main
       - dev
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
 
 jobs:
   deploy-dev:
-    if: github.ref == 'refs/heads/dev'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     steps:
       - name: Deploy to Dev instance
@@ -22,31 +26,14 @@ jobs:
             git fetch origin
             git reset --hard origin/dev
 
-            sudo cp deploy/systemd/*.service /etc/systemd/system/
-            sudo systemctl daemon-reload
+            sudo systemctl disable --now yolo agent frontend || true
 
-            cd /home/ubuntu/PolyAIFursa/services/yolo
-            source .venv/bin/activate
-            pip install -r requirements.txt
-            python -c "import app; app.init_db()"
-
-            cd /home/ubuntu/PolyAIFursa/services/agent
-            source .venv/bin/activate
-            pip install -r requirements.txt
-
-            cd /home/ubuntu/PolyAIFursa/services/frontend
-            npm install
-            npm run build
-
-            sudo systemctl enable yolo agent frontend
-            sudo systemctl restart yolo agent frontend
-
-            sudo systemctl status yolo --no-pager
-            sudo systemctl status agent --no-pager
-            sudo systemctl status frontend --no-pager
+            docker compose config
+            docker compose up -d --build --remove-orphans
+            docker compose ps
 
   deploy-prod:
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     steps:
       - name: Deploy to Prod instance
@@ -60,25 +47,10 @@ jobs:
             git fetch origin
             git reset --hard origin/main
 
-            sudo cp deploy/systemd/*.service /etc/systemd/system/
-            sudo systemctl daemon-reload
+            docker compose config
+            docker compose build
 
-            cd /home/ubuntu/PolyAIFursa/services/yolo
-            source .venv/bin/activate
-            pip install -r requirements.txt
-            python -c "import app; app.init_db()"
+            sudo systemctl disable --now yolo agent frontend || true
 
-            cd /home/ubuntu/PolyAIFursa/services/agent
-            source .venv/bin/activate
-            pip install -r requirements.txt
-
-            cd /home/ubuntu/PolyAIFursa/services/frontend
-            npm install
-            npm run build
-
-            sudo systemctl enable yolo agent frontend
-            sudo systemctl restart yolo agent frontend
-
-            sudo systemctl status yolo --no-pager
-            sudo systemctl status agent --no-pager
-            sudo systemctl status frontend --no-pager
+            docker compose up -d --remove-orphans
+            docker compose ps

@@ -5,7 +5,8 @@ After=network.target
 [Service]
 User=ubuntu
 WorkingDirectory=/home/ubuntu/PolyAIFursa/services/yolo
-
+Environment="AWS_REGION=us-east-1"
+Environment="AWS_S3_BUCKET=ahmad-polyai-images"
 ExecStart=/home/ubuntu/PolyAIFursa/services/yolo/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8080
 
 Restart=always
