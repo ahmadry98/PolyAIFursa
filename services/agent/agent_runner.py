@@ -45,6 +45,70 @@ def _store_tool_image_result(data: dict) -> tuple[str | None, dict]:
     return annotated_image_url, _remove_none_values(sanitized_data)
 
 
+def _describe_edit_target(operation: dict) -> str:
+    if operation.get("target") == "whole image":
+        return "the whole image"
+
+    object_label = operation.get("object_label")
+    if object_label:
+        selection_text = operation.get("selection_text", "").lower()
+        if "right" in selection_text:
+            return f"the {object_label} on the right"
+        if "left" in selection_text:
+            return f"the {object_label} on the left"
+
+        occurrence = operation.get("occurrence", 1)
+        if occurrence == 1:
+            return f"the selected {object_label}"
+        return f"the selected {object_label} #{occurrence}"
+
+    return "the image"
+
+
+def _describe_edit_operation(operation: dict) -> str:
+    tool_name = operation.get("tool", "edit")
+    target = _describe_edit_target(operation)
+
+    if tool_name == "add_noise":
+        amount = operation.get("amount", 0.05)
+        return f"added {amount} noise to {target}"
+    if tool_name == "blur":
+        radius = operation.get("radius", 2.0)
+        return f"blurred {target} with radius {radius}"
+    if tool_name == "rotate":
+        angle = operation.get("angle", 90)
+        return f"rotated {target} by {angle} degrees"
+    if tool_name == "flip":
+        direction = operation.get("direction", "horizontal")
+        return f"flipped {target} {direction}ly"
+    if tool_name == "draw_box":
+        color = operation.get("color", "yellow")
+        return f"drew a {color} box around {target}"
+    if tool_name == "crop":
+        return f"cropped {target}"
+
+    return f"edited {target}"
+
+
+def _format_multi_edit_response(operations: list[dict]) -> str:
+    if not operations:
+        return "I applied the requested edits to the image."
+
+    descriptions = [
+        _describe_edit_operation(operation)
+        for operation in operations
+    ]
+
+    if len(descriptions) == 1:
+        return f"I {descriptions[0]}."
+
+    return (
+        f"I applied {len(descriptions)} edits: "
+        + "; ".join(descriptions)
+        + "."
+    )
+
+
 def run_agent(history: list, max_iterations: int = 10):
     """
     Simple ReAct loop with max_iterations guard.
@@ -69,7 +133,7 @@ def run_agent(history: list, max_iterations: int = 10):
         else:
             annotated_image_url, _ = _store_tool_image_result(multi_edit_result)
             operations = multi_edit_result.get("operations", [])
-            response = f"I applied {len(operations)} edits to the image."
+            response = _format_multi_edit_response(operations)
 
             errors = multi_edit_result.get("errors", [])
             if errors:

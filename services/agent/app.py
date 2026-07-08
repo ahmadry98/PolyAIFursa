@@ -17,7 +17,6 @@ from tools import (
     _current_image_b64,
     _current_user_text,
     _edit_step,
-    _original_s3_key,
     _working_image_b64,
     _working_s3_key,
 )
@@ -79,13 +78,11 @@ def chat(request: ChatRequest):
             )
             lc_messages.append(AIMessage(content=msg.content))
 
-    original_s3_key = None
     working_s3_key = None
     chat_id = latest_chat_id
     if latest_image:
         image_state = _init_working_image_in_s3(latest_image)
         chat_id = image_state["chat_id"]
-        original_s3_key = image_state["original_s3_key"]
         working_s3_key = image_state["working_s3_key"]
     elif chat_id:
         working_s3_key = f"{chat_id}/working/current.png"
@@ -94,7 +91,6 @@ def chat(request: ChatRequest):
     working_token = _working_image_b64.set(None)
     text_token = _current_user_text.set(latest_user_text)
     chat_token = _current_chat_id.set(chat_id)
-    original_token = _original_s3_key.set(original_s3_key)
     working_s3_token = _working_s3_key.set(working_s3_key)
     step_token = _edit_step.set(0)
     try:
@@ -105,7 +101,6 @@ def chat(request: ChatRequest):
         _working_image_b64.reset(working_token)
         _current_user_text.reset(text_token)
         _current_chat_id.reset(chat_token)
-        _original_s3_key.reset(original_token)
         _working_s3_key.reset(working_s3_token)
         _edit_step.reset(step_token)
 

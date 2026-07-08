@@ -289,7 +289,10 @@ def test_chat_multi_edit_uses_plan_executor_without_llm(monkeypatch):
         io.BytesIO(base64.b64decode(stored["image_base64"]))
     ).convert("RGB")
 
-    assert data["response"] == "I applied 2 edits to the image."
+    assert data["response"] == (
+        "I applied 2 edits: added 0.5 noise to the person on the right; "
+        "added 0.9 noise to the person on the left."
+    )
     assert data["annotated_image_url"] == "/processed/chat-multi/image"
     assert data["tools_called"] == ["apply_image_edit_plan"]
     assert stored["chat_id"] == "chat-multi"
@@ -374,7 +377,10 @@ def test_chat_multiline_edit_uses_plan_executor_without_llm(monkeypatch):
         io.BytesIO(base64.b64decode(stored["image_base64"]))
     ).convert("RGB")
 
-    assert data["response"] == "I applied 2 edits to the image."
+    assert data["response"] == (
+        "I applied 2 edits: added 0.05 noise to the whole image; "
+        "rotated the whole image by 90 degrees."
+    )
     assert data["annotated_image_url"] == "/processed/chat-lines/image"
     assert data["tools_called"] == ["apply_image_edit_plan"]
     assert final_image.size == (30, 50)
