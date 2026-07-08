@@ -36,10 +36,7 @@ _current_chat_id: ContextVar[Optional[str]] = ContextVar(
     "current_chat_id",
     default=None,
 )
-_original_s3_key: ContextVar[Optional[str]] = ContextVar(
-    "original_s3_key",
-    default=None,
-)
+
 _working_s3_key: ContextVar[Optional[str]] = ContextVar(
     "working_s3_key",
     default=None,
