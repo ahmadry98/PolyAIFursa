@@ -3,7 +3,7 @@ import logging
 import re
 import time
 
-from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 import config
 from image_utils import _remove_none_values, _store_processed_image
@@ -109,6 +109,57 @@ def _format_multi_edit_response(operations: list[dict]) -> str:
     )
 
 
+def _content_to_text(content) -> str:
+    if isinstance(content, list):
+        return "\n".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+
+    return str(content)
+
+
+def _clean_model_text(content) -> str:
+    text = _content_to_text(content)
+    return re.sub(
+        r"<thinking>.*?</thinking>\s*",
+        "",
+        text,
+        flags=re.DOTALL,
+    ).strip()
+
+
+def _generate_edit_response_with_llm(
+    messages: list,
+    sanitized_data: dict,
+    fallback_response: str,
+) -> str:
+    prompt = HumanMessage(
+        content=(
+            "The image edits have already been completed successfully. "
+            "Write a friendly, informative 2-3 sentence response for the user. "
+            "Mention what changed, which objects or image areas were targeted, "
+            "and any important parameters like angle, blur radius, or noise amount. "
+            "Do not call tools. Do not mention base64, S3, storage keys, URLs, "
+            "JSON, internal IDs, or backend implementation details.\n\n"
+            f"Completed edit summary:\n{json.dumps(sanitized_data)}"
+        )
+    )
+
+    try:
+        response: AIMessage = config.get_llm_with_tools().invoke(messages + [prompt])
+    except Exception:
+        logging.exception("Failed to generate edit response with LLM")
+        return fallback_response
+
+    if response.tool_calls:
+        return fallback_response
+
+    content = _clean_model_text(response.content)
+    return content or fallback_response
+
+
 def run_agent(history: list, max_iterations: int = 10):
     """
     Simple ReAct loop with max_iterations guard.
@@ -131,9 +182,15 @@ def run_agent(history: list, max_iterations: int = 10):
             response = multi_edit_result["error"]
             annotated_image_url = None
         else:
-            annotated_image_url, _ = _store_tool_image_result(multi_edit_result)
+            annotated_image_url, sanitized_data = _store_tool_image_result(
+                multi_edit_result
+            )
             operations = multi_edit_result.get("operations", [])
-            response = _format_multi_edit_response(operations)
+            response = _generate_edit_response_with_llm(
+                messages,
+                sanitized_data,
+                _format_multi_edit_response(operations),
+            )
 
             errors = multi_edit_result.get("errors", [])
             if errors:
@@ -171,21 +228,7 @@ def run_agent(history: list, max_iterations: int = 10):
         )
 
         if not response.tool_calls:
-            content = response.content
-
-            if isinstance(content, list):
-                content = "\n".join(
-                    part.get("text", "")
-                    for part in content
-                    if isinstance(part, dict) and part.get("type") == "text"
-                )
-
-            content = re.sub(
-                r"<thinking>.*?</thinking>\s*",
-                "",
-                str(content),
-                flags=re.DOTALL,
-            )
+            content = _clean_model_text(response.content)
 
             return {
                 "response": content,
