@@ -1,5 +1,6 @@
 FROM node:20-trixie-slim AS deps
-RUN npm install -g npm@latest
+ARG NPM_VERSION=10.9.4
+RUN npm install -g npm@${NPM_VERSION}
 
 WORKDIR /app
 
@@ -7,7 +8,8 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 FROM node:20-trixie-slim AS builder
-RUN npm install -g npm@latest
+ARG NPM_VERSION=10.9.4
+RUN npm install -g npm@${NPM_VERSION}
 
 WORKDIR /app
 
@@ -20,7 +22,8 @@ ENV NEXT_PUBLIC_AGENT_URL=$NEXT_PUBLIC_AGENT_URL
 RUN npm run build
 
 FROM node:20-trixie-slim AS runner
-RUN npm install -g npm@latest \
+ARG NPM_VERSION=10.9.4
+RUN npm install -g npm@${NPM_VERSION} \
     && apt-get update \
     && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/*
