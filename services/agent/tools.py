@@ -469,8 +469,8 @@ def edit_detected_object(
             "processing_note": (
                 "For crop_object, only the selected object's cropped region is returned. "
                 "For other object operations, the edited crop was pasted back into the original image. "
-                "For rotate_object, the crop was resized back into the original "
-                "object bounding box after rotation."
+                "For rotate_object and flip_object, a local square region around "
+                "the selected object was edited so the change remains visible."
             ),
             "image_base64": final_image_b64,
         }
