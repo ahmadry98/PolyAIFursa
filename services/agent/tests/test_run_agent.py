@@ -468,7 +468,7 @@ def test_edit_detected_object_uses_occurrence_from_right(monkeypatch):
 
     assert captured["tool_name"] == "rotate"
     assert captured["arguments"]["angle"] == 90
-    assert cropped.size == (90, 90)
+    assert cropped.size == (15, 90)
     assert result["operation"] == "rotate_object"
 
 
@@ -765,11 +765,12 @@ def test_run_agent_applies_sequential_object_then_whole_image_edit(monkeypatch):
     assert final_image.size == (40, 60)
 
 
-def test_object_rotate_uses_square_region_so_change_is_visible(monkeypatch):
+def test_object_rotate_fits_back_into_selected_box(monkeypatch):
     image = Image.new("RGB", (60, 60), "white")
     for x in range(20, 30):
         for y in range(10, 50):
-            image.putpixel((x, y), (255, 0, 0))
+            color = (255, 0, 0) if y < 30 else (0, 0, 255)
+            image.putpixel((x, y), color)
     image_b64 = image_utils._encode_image(image)
 
     def fake_run_img_proc_mcp(tool_name, arguments):
@@ -800,5 +801,11 @@ def test_object_rotate_uses_square_region_so_change_is_visible(monkeypatch):
     ).convert("RGB")
 
     assert error is None
-    assert result_image.getpixel((10, 30)) == (255, 0, 0)
-    assert result_image.getpixel((20, 10)) == (255, 255, 255)
+    assert result_image.getpixel((10, 30)) == (255, 255, 255)
+    assert result_image.getpixel((35, 30)) == (255, 255, 255)
+    changed_inside_box = any(
+        result_image.getpixel((x, y)) != image.getpixel((x, y))
+        for x in range(20, 30)
+        for y in range(10, 50)
+    )
+    assert changed_inside_box

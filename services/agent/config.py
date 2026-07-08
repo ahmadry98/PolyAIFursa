@@ -52,8 +52,8 @@ SYSTEM_PROMPT = (
     "noise amount, resize dimensions, or crop region when available. "
     "If the operation was applied to a detected object, mention that only the "
     "selected object was changed and identify the selected object in natural language. "
-    "If operation is rotate_object or flip_object, mention that the object was edited "
-    "in a local region around the selected object. "
+    "If operation is rotate_object or flip_object, mention that the edited object "
+    "was fitted back into its original location. "
     "Never include base64, markdown image syntax, or internal IDs in the final answer. "
     "The frontend will display the processed image automatically."
 )

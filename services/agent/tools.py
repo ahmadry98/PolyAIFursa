@@ -396,11 +396,7 @@ def edit_detected_object(
         )
 
     target = sorted_detections[occurrence - 1]
-    edit_box = target["box"]
-    if operation in {"rotate", "flip"}:
-        edit_box = _square_box_around_object(image_b64, target["box"])
-
-    cropped_img, safe_box = _crop_region(image_b64, edit_box)
+    cropped_img, safe_box = _crop_region(image_b64, target["box"])
     cropped_b64 = _encode_image(cropped_img)
 
     if operation == "crop":
@@ -469,8 +465,8 @@ def edit_detected_object(
             "processing_note": (
                 "For crop_object, only the selected object's cropped region is returned. "
                 "For other object operations, the edited crop was pasted back into the original image. "
-                "For rotate_object and flip_object, a local square region around "
-                "the selected object was edited so the change remains visible."
+                "For rotate_object and flip_object, the edited crop was fitted "
+                "back into the selected object's original location."
             ),
             "image_base64": final_image_b64,
         }
@@ -624,42 +620,6 @@ def _draw_box(image_b64: str, box: list[float], color: str) -> str:
     return _encode_image(img)
 
 
-def _square_box_around_object(
-    image_b64: str,
-    box: list[float],
-) -> list[int]:
-    img = _decode_image(image_b64)
-    left, top, right, bottom = [int(value) for value in box]
-
-    width = max(1, right - left)
-    height = max(1, bottom - top)
-    side = max(width, height)
-    center_x = (left + right) / 2
-    center_y = (top + bottom) / 2
-
-    square_left = int(round(center_x - side / 2))
-    square_top = int(round(center_y - side / 2))
-    square_right = square_left + side
-    square_bottom = square_top + side
-
-    if square_left < 0:
-        square_right -= square_left
-        square_left = 0
-    if square_top < 0:
-        square_bottom -= square_top
-        square_top = 0
-    if square_right > img.width:
-        overflow = square_right - img.width
-        square_left = max(0, square_left - overflow)
-        square_right = img.width
-    if square_bottom > img.height:
-        overflow = square_bottom - img.height
-        square_top = max(0, square_top - overflow)
-        square_bottom = img.height
-
-    return [square_left, square_top, square_right, square_bottom]
-
-
 def _execute_whole_image_edit(image_b64: str, operation: dict[str, Any]) -> str:
     tool_name = operation["tool"]
 
@@ -712,11 +672,7 @@ def _execute_object_edit(
         )
         return boxed_image_b64, None
 
-    edit_box = target["box"]
-    if operation["tool"] in {"rotate", "flip"}:
-        edit_box = _square_box_around_object(image_b64, target["box"])
-
-    cropped_img, safe_box = _crop_region(image_b64, edit_box)
+    cropped_img, safe_box = _crop_region(image_b64, target["box"])
     cropped_b64 = _encode_image(cropped_img)
     processed_crop_b64 = _execute_whole_image_edit(cropped_b64, operation)
     return _paste_region(image_b64, processed_crop_b64, safe_box), None
