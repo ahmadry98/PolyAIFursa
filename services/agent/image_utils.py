@@ -8,7 +8,7 @@ import httpx
 from PIL import Image
 
 from config import YOLO_SERVICE_URL
-from s3_utils import upload_bytes_to_s3
+from s3_utils import download_bytes_from_s3, upload_bytes_to_s3
 
 
 def _decode_uploaded_image(image_b64: str) -> tuple[bytes, str, str]:
@@ -40,6 +40,66 @@ def _store_processed_image(image_b64: str) -> str:
         content_type="image/png",
     )
     return f"/processed/{image_id}/image"
+
+
+def _image_to_png_bytes(image_b64: str) -> bytes:
+    img = _decode_image(image_b64)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _bytes_to_image_b64(image_bytes: bytes) -> str:
+    return base64.b64encode(image_bytes).decode()
+
+
+def _init_working_image_in_s3(image_b64: str) -> dict[str, str]:
+    image_bytes, image_name, content_type = _decode_uploaded_image(image_b64)
+    chat_id = str(uuid.uuid4())
+    original_s3_key = f"{chat_id}/original/{image_name}"
+    working_s3_key = f"{chat_id}/working/current.png"
+
+    upload_bytes_to_s3(
+        data=image_bytes,
+        key=original_s3_key,
+        content_type=content_type,
+    )
+    upload_bytes_to_s3(
+        data=_image_to_png_bytes(image_b64),
+        key=working_s3_key,
+        content_type="image/png",
+    )
+
+    return {
+        "chat_id": chat_id,
+        "original_s3_key": original_s3_key,
+        "working_s3_key": working_s3_key,
+    }
+
+
+def _load_image_b64_from_s3(key: str) -> str:
+    return _bytes_to_image_b64(download_bytes_from_s3(key))
+
+
+def _store_working_image(
+    image_b64: str,
+    chat_id: str,
+    working_s3_key: str,
+    step_id: str | None = None,
+) -> None:
+    image_bytes = base64.b64decode(image_b64)
+    upload_bytes_to_s3(
+        data=image_bytes,
+        key=working_s3_key,
+        content_type="image/png",
+    )
+
+    if step_id:
+        upload_bytes_to_s3(
+            data=image_bytes,
+            key=f"{chat_id}/edits/{step_id}.png",
+            content_type="image/png",
+        )
 
 
 def _remove_none_values(value: Any) -> Any:

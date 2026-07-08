@@ -1,3 +1,7 @@
+# Local laptop/development override only.
+#
+# Do not use this file on EC2. It mounts ~/.aws and sets AWS_PROFILE for local
+# credentials. On EC2, use compose.yaml only.
 services:
   frontend:
     build:

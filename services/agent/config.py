@@ -39,6 +39,9 @@ SYSTEM_PROMPT = (
     "For whole-image requests that ask to rotate, flip, blur, resize, crop, "
     "or add noise, use the matching whole-image processing tool. "
     "For object-specific edit or crop requests, use edit_detected_object. "
+    "If one user message asks for multiple image edits joined by words like "
+    "'and' or 'then', use apply_image_edit_plan so the edits run in order on "
+    "one working image and only the final image is displayed. "
     "If the user says 'person on the left' or 'person on the right', call "
     'edit_detected_object with object_label="person", occurrence=1, and the '
     "operation that matches the requested edit. "
@@ -49,8 +52,8 @@ SYSTEM_PROMPT = (
     "noise amount, resize dimensions, or crop region when available. "
     "If the operation was applied to a detected object, mention that only the "
     "selected object was changed and identify the selected object in natural language. "
-    "If operation is rotate_object, mention that rotating a cropped object may "
-    "change its dimensions, so it was resized back into the original bounding box. "
+    "If operation is rotate_object or flip_object, mention that the edited object "
+    "was fitted back into its original location. "
     "Never include base64, markdown image syntax, or internal IDs in the final answer. "
     "The frontend will display the processed image automatically."
 )

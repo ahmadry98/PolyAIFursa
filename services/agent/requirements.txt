@@ -9,10 +9,11 @@ langchain-aws
 langchain[openai]
 langchain[anthropic]
 langchain[google-genai]
-mcp[cli]
+
 
 httpx
 pydantic
 boto3
 pytest
 pillow
+mcp

@@ -5,7 +5,9 @@ on:
     branches:
       - dev
       - main
-
+  pull_request:
+    branches:
+      - main
 jobs:
   docker-scout:
     runs-on: ubuntu-latest
