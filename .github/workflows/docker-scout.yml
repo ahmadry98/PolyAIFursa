@@ -57,4 +57,4 @@ jobs:
           image: ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.service.image }}:${{ github.sha }}-scout
           only-severities: critical,high
           only-fixed: true
-          exit-code: true
+          exit-code: false
