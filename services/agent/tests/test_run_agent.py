@@ -468,7 +468,7 @@ def test_edit_detected_object_uses_occurrence_from_right(monkeypatch):
 
     assert captured["tool_name"] == "rotate"
     assert captured["arguments"]["angle"] == 90
-    assert cropped.size == (15, 90)
+    assert cropped.size == (90, 90)
     assert result["operation"] == "rotate_object"
 
 
@@ -763,3 +763,42 @@ def test_run_agent_applies_sequential_object_then_whole_image_edit(monkeypatch):
     assert result["annotated_image_url"] == "/processed/sequential/image"
     assert rotate_input["pixel_after_first_edit"] == (0, 0, 0)
     assert final_image.size == (40, 60)
+
+
+def test_object_rotate_uses_square_region_so_change_is_visible(monkeypatch):
+    image = Image.new("RGB", (60, 60), "white")
+    for x in range(20, 30):
+        for y in range(10, 50):
+            image.putpixel((x, y), (255, 0, 0))
+    image_b64 = image_utils._encode_image(image)
+
+    def fake_run_img_proc_mcp(tool_name, arguments):
+        assert tool_name == "rotate"
+        crop = Image.open(
+            io.BytesIO(base64.b64decode(arguments["image_b64"]))
+        ).convert("RGB")
+        rotated = crop.rotate(arguments["angle"], expand=True)
+        return image_utils._encode_image(rotated)
+
+    monkeypatch.setattr(tools, "_run_img_proc_mcp", fake_run_img_proc_mcp)
+
+    result_b64, error = tools._execute_object_edit(
+        image_b64,
+        {
+            "tool": "rotate",
+            "object_label": "person",
+            "occurrence": 1,
+            "selection_text": "rotate the first person to the left",
+            "target": "rotate the first person to the left",
+            "angle": 90,
+        },
+        [{"label": "person", "box": [20, 10, 30, 50]}],
+    )
+
+    result_image = Image.open(
+        io.BytesIO(base64.b64decode(result_b64))
+    ).convert("RGB")
+
+    assert error is None
+    assert result_image.getpixel((10, 30)) == (255, 0, 0)
+    assert result_image.getpixel((20, 10)) == (255, 255, 255)
