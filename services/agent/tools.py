@@ -18,8 +18,10 @@ from image_utils import (
     _detect_uploaded_image,
     _decode_image,
     _encode_image,
+    _load_image_b64_from_s3,
     _paste_region,
     _sort_detections_horizontally,
+    _store_working_image,
 )
 
 _current_image_b64: ContextVar[Optional[str]] = ContextVar(
@@ -30,6 +32,19 @@ _working_image_b64: ContextVar[Optional[str]] = ContextVar(
     "working_image_b64",
     default=None,
 )
+_current_chat_id: ContextVar[Optional[str]] = ContextVar(
+    "current_chat_id",
+    default=None,
+)
+_original_s3_key: ContextVar[Optional[str]] = ContextVar(
+    "original_s3_key",
+    default=None,
+)
+_working_s3_key: ContextVar[Optional[str]] = ContextVar(
+    "working_s3_key",
+    default=None,
+)
+_edit_step: ContextVar[int] = ContextVar("edit_step", default=0)
 _current_user_text: ContextVar[str] = ContextVar("current_user_text", default="")
 
 OBJECT_LABELS = [
@@ -60,10 +75,33 @@ ORDINAL_WORDS = {
 
 
 def _get_image_b64() -> Optional[str]:
+    working_s3_key = _working_s3_key.get()
+    if working_s3_key:
+        try:
+            return _load_image_b64_from_s3(working_s3_key)
+        except Exception:
+            chat_id = _current_chat_id.get()
+            if chat_id:
+                return _load_image_b64_from_s3(f"processed/{chat_id}/image.png")
+            raise
+
     return _working_image_b64.get() or _current_image_b64.get()
 
 
 def _set_working_image_b64(image_b64: str) -> None:
+    chat_id = _current_chat_id.get()
+    working_s3_key = _working_s3_key.get()
+    if chat_id and working_s3_key:
+        step_number = _edit_step.get() + 1
+        _edit_step.set(step_number)
+        _store_working_image(
+            image_b64,
+            chat_id,
+            working_s3_key,
+            step_id=f"{step_number:03d}",
+        )
+        return
+
     _working_image_b64.set(image_b64)
 
 

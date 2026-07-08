@@ -13,6 +13,8 @@ class ChatMessage(BaseModel):
     role: str
     content: str
     image_base64: Optional[str] = None
+    annotated_image_url: Optional[str] = None
+    image_url: Optional[str] = None
 
 
 class ChatRequest(BaseModel):

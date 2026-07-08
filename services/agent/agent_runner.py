@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 import config
 from image_utils import _remove_none_values, _store_processed_image
 from schemas import TokenUsage
-from tools import TOOLS, run_multi_edit_request
+from tools import TOOLS, _current_chat_id, run_multi_edit_request
 
 
 def _store_tool_image_result(data: dict) -> tuple[str | None, dict]:
@@ -16,7 +16,12 @@ def _store_tool_image_result(data: dict) -> tuple[str | None, dict]:
     if not processed_image_b64:
         return None, data
 
-    annotated_image_url = _store_processed_image(processed_image_b64)
+    chat_id = data.get("chat_id") or _current_chat_id.get()
+    if chat_id:
+        annotated_image_url = f"/processed/{chat_id}/image"
+    else:
+        annotated_image_url = _store_processed_image(processed_image_b64)
+
     operation = data.get("operation", "processed")
     sanitized_data = {
         key: value

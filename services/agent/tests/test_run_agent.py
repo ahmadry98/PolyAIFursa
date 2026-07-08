@@ -331,6 +331,95 @@ def test_crop_image_rounds_float_coordinates(monkeypatch):
     assert result["operation"] == "crop"
 
 
+def test_init_working_image_in_s3_uploads_original_and_working(monkeypatch):
+    image = Image.new("RGB", (20, 10), "white")
+    image_buffer = io.BytesIO()
+    image.save(image_buffer, format="PNG")
+    image_b64 = base64.b64encode(image_buffer.getvalue()).decode()
+    uploads = []
+
+    def fake_upload_bytes_to_s3(data, key, content_type):
+        uploads.append(
+            {
+                "data": data,
+                "key": key,
+                "content_type": content_type,
+            }
+        )
+        return key
+
+    monkeypatch.setattr(image_utils.uuid, "uuid4", lambda: "chat-123")
+    monkeypatch.setattr(image_utils, "upload_bytes_to_s3", fake_upload_bytes_to_s3)
+
+    state = image_utils._init_working_image_in_s3(image_b64)
+
+    assert state == {
+        "chat_id": "chat-123",
+        "original_s3_key": "chat-123/original/image.png",
+        "working_s3_key": "chat-123/working/current.png",
+    }
+    assert uploads[0]["key"] == "chat-123/original/image.png"
+    assert uploads[0]["content_type"] == "image/png"
+    assert uploads[0]["data"] == base64.b64decode(image_b64)
+    assert uploads[1]["key"] == "chat-123/working/current.png"
+    assert uploads[1]["content_type"] == "image/png"
+    assert Image.open(io.BytesIO(uploads[1]["data"])).size == (20, 10)
+
+
+def test_edit_tool_downloads_and_updates_s3_working_image(monkeypatch):
+    original = Image.new("RGB", (20, 10), "white")
+    processed = Image.new("RGB", (20, 10), "black")
+    original_b64 = image_utils._encode_image(original)
+    processed_b64 = image_utils._encode_image(processed)
+    captured = {}
+
+    def fake_load_image_b64_from_s3(key):
+        captured["download_key"] = key
+        return original_b64
+
+    def fake_run_img_proc_mcp(tool_name, arguments):
+        captured["tool_name"] = tool_name
+        captured["tool_arguments"] = arguments
+        return processed_b64
+
+    def fake_store_working_image(image_b64, chat_id, working_s3_key, step_id=None):
+        captured["stored_image_b64"] = image_b64
+        captured["chat_id"] = chat_id
+        captured["working_s3_key"] = working_s3_key
+        captured["step_id"] = step_id
+
+    monkeypatch.setattr(tools, "_load_image_b64_from_s3", fake_load_image_b64_from_s3)
+    monkeypatch.setattr(tools, "_run_img_proc_mcp", fake_run_img_proc_mcp)
+    monkeypatch.setattr(tools, "_store_working_image", fake_store_working_image)
+
+    chat_token = tools._current_chat_id.set("chat-123")
+    working_s3_token = tools._working_s3_key.set("chat-123/working/current.png")
+    step_token = tools._edit_step.set(0)
+    image_token = tools._current_image_b64.set(None)
+    working_token = tools._working_image_b64.set(None)
+
+    try:
+        result = json.loads(tools.rotate_image.invoke({"angle": 90}))
+    finally:
+        tools._current_chat_id.reset(chat_token)
+        tools._working_s3_key.reset(working_s3_token)
+        tools._edit_step.reset(step_token)
+        tools._current_image_b64.reset(image_token)
+        tools._working_image_b64.reset(working_token)
+
+    assert captured["download_key"] == "chat-123/working/current.png"
+    assert captured["tool_name"] == "rotate"
+    assert captured["tool_arguments"] == {
+        "image_b64": original_b64,
+        "angle": 90,
+    }
+    assert captured["stored_image_b64"] == processed_b64
+    assert captured["chat_id"] == "chat-123"
+    assert captured["working_s3_key"] == "chat-123/working/current.png"
+    assert captured["step_id"] == "001"
+    assert result["image_base64"] == processed_b64
+
+
 def test_edit_detected_object_uses_occurrence_from_right(monkeypatch):
     image = Image.new("RGB", (120, 120), "white")
     image_buffer = io.BytesIO()

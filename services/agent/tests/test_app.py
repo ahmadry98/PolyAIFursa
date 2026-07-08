@@ -64,6 +64,15 @@ def test_chat_api_mocks_run_agent(monkeypatch):
         }
 
     monkeypatch.setattr(app, "run_agent", fake_run_agent)
+    monkeypatch.setattr(
+        app,
+        "_init_working_image_in_s3",
+        lambda _image: {
+            "chat_id": "chat-123",
+            "original_s3_key": "chat-123/original/image.png",
+            "working_s3_key": "chat-123/working/current.png",
+        },
+    )
 
     response = client.post(
         "/chat",
@@ -87,6 +96,7 @@ def test_chat_api_mocks_run_agent(monkeypatch):
     assert data["tools_called"] == []
     assert data["tokens_used"]["total"] == 15
     assert captured["image"] == "aW1hZ2UtYnl0ZXM="
+    assert app._current_chat_id.get() is None
     assert isinstance(captured["history"][0], HumanMessage)
     assert "aW1hZ2UtYnl0ZXM=" not in captured["history"][0].content
     assert app._current_image_b64.get() is None
@@ -116,6 +126,15 @@ def test_chat_object_edit_goes_through_run_agent(monkeypatch):
         }
 
     monkeypatch.setattr(app, "run_agent", fake_run_agent)
+    monkeypatch.setattr(
+        app,
+        "_init_working_image_in_s3",
+        lambda _image: {
+            "chat_id": "chat-object",
+            "original_s3_key": "chat-object/original/image.png",
+            "working_s3_key": "chat-object/working/current.png",
+        },
+    )
 
     response = client.post(
         "/chat",
@@ -139,6 +158,55 @@ def test_chat_object_edit_goes_through_run_agent(monkeypatch):
     assert captured["image"] == "aW1hZ2UtYnl0ZXM="
     assert captured["text"] == "blur the second person from the right"
     assert isinstance(captured["history"][0], HumanMessage)
+
+
+def test_chat_recovers_working_image_state_from_previous_response(monkeypatch):
+    captured = {}
+
+    def fake_run_agent(history, max_iterations=10):
+        captured["chat_id"] = app._current_chat_id.get()
+        captured["working_s3_key"] = app._working_s3_key.get()
+        return {
+            "response": "Edited again.",
+            "prediction_id": None,
+            "annotated_image": None,
+            "annotated_image_url": "/processed/chat-existing/image",
+            "agent_loop_time_s": 0.1,
+            "iterations": 1,
+            "tools_called": [],
+            "context_limit_exceeded": False,
+            "tokens_used": {
+                "input": 0,
+                "output": 0,
+                "total": 0,
+            },
+        }
+
+    monkeypatch.setattr(app, "run_agent", fake_run_agent)
+
+    response = client.post(
+        "/chat",
+        json={
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "Previous edit.",
+                    "annotated_image_url": (
+                        "http://dev.ahmad.fursa.click:8000"
+                        "/processed/chat-existing/image"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": "rotate the image",
+                },
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["chat_id"] == "chat-existing"
+    assert captured["working_s3_key"] == "chat-existing/working/current.png"
 
 
 def test_chat_multi_edit_uses_plan_executor_without_llm(monkeypatch):
@@ -167,11 +235,31 @@ def test_chat_multi_edit_uses_plan_executor_without_llm(monkeypatch):
         stored["image_base64"] = image_base64
         return "/processed/final/image"
 
+    def fake_store_working_image(image_base64, chat_id, working_s3_key, step_id=None):
+        stored["image_base64"] = image_base64
+        stored["chat_id"] = chat_id
+        stored["working_s3_key"] = working_s3_key
+
     def fail_if_llm_is_used():
         raise AssertionError("multi-edit requests should not need the LLM path")
 
     monkeypatch.setattr(tools, "_detect_uploaded_image", fake_detect_uploaded_image)
     monkeypatch.setattr(tools, "_run_img_proc_mcp", fake_run_img_proc_mcp)
+    monkeypatch.setattr(
+        app,
+        "_init_working_image_in_s3",
+        lambda _image: {
+            "chat_id": "chat-multi",
+            "original_s3_key": "chat-multi/original/image.png",
+            "working_s3_key": "chat-multi/working/current.png",
+        },
+    )
+    monkeypatch.setattr(
+        tools,
+        "_load_image_b64_from_s3",
+        lambda _key: image_b64,
+    )
+    monkeypatch.setattr(tools, "_store_working_image", fake_store_working_image)
     monkeypatch.setattr(
         agent_runner,
         "_store_processed_image",
@@ -202,8 +290,10 @@ def test_chat_multi_edit_uses_plan_executor_without_llm(monkeypatch):
     ).convert("RGB")
 
     assert data["response"] == "I applied 2 edits to the image."
-    assert data["annotated_image_url"] == "/processed/final/image"
+    assert data["annotated_image_url"] == "/processed/chat-multi/image"
     assert data["tools_called"] == ["apply_image_edit_plan"]
+    assert stored["chat_id"] == "chat-multi"
+    assert stored["working_s3_key"] == "chat-multi/working/current.png"
     assert final_image.getpixel((65, 10)) == (0, 0, 0)
     assert final_image.getpixel((10, 10)) == (128, 128, 128)
 
@@ -231,10 +321,30 @@ def test_chat_multiline_edit_uses_plan_executor_without_llm(monkeypatch):
         stored["image_base64"] = image_base64
         return "/processed/multiline/image"
 
+    def fake_store_working_image(image_base64, chat_id, working_s3_key, step_id=None):
+        stored["image_base64"] = image_base64
+        stored["chat_id"] = chat_id
+        stored["working_s3_key"] = working_s3_key
+
     def fail_if_llm_is_used():
         raise AssertionError("multiline edit requests should not need the LLM path")
 
     monkeypatch.setattr(tools, "_run_img_proc_mcp", fake_run_img_proc_mcp)
+    monkeypatch.setattr(
+        app,
+        "_init_working_image_in_s3",
+        lambda _image: {
+            "chat_id": "chat-lines",
+            "original_s3_key": "chat-lines/original/image.png",
+            "working_s3_key": "chat-lines/working/current.png",
+        },
+    )
+    monkeypatch.setattr(
+        tools,
+        "_load_image_b64_from_s3",
+        lambda _key: image_b64,
+    )
+    monkeypatch.setattr(tools, "_store_working_image", fake_store_working_image)
     monkeypatch.setattr(
         agent_runner,
         "_store_processed_image",
@@ -265,23 +375,44 @@ def test_chat_multiline_edit_uses_plan_executor_without_llm(monkeypatch):
     ).convert("RGB")
 
     assert data["response"] == "I applied 2 edits to the image."
-    assert data["annotated_image_url"] == "/processed/multiline/image"
+    assert data["annotated_image_url"] == "/processed/chat-lines/image"
     assert data["tools_called"] == ["apply_image_edit_plan"]
     assert final_image.size == (30, 50)
 
 
-def test_processed_image_endpoint_returns_png(monkeypatch):
+def test_processed_image_endpoint_returns_working_png(monkeypatch):
     captured = {}
 
     def fake_download_bytes_from_s3(key):
         captured["key"] = key
-        return b"png bytes"
+        return b"working png bytes"
 
     monkeypatch.setattr(app, "download_bytes_from_s3", fake_download_bytes_from_s3)
 
-    response = client.get("/processed/processed-image-id/image")
+    response = client.get("/processed/chat-123/image")
 
     assert response.status_code == 200
-    assert response.content == b"png bytes"
+    assert response.content == b"working png bytes"
     assert response.headers["content-type"] == "image/png"
-    assert captured["key"] == "processed/processed-image-id/image.png"
+    assert captured["key"] == "chat-123/working/current.png"
+
+
+def test_processed_image_endpoint_keeps_old_processed_url_fallback(monkeypatch):
+    captured = []
+
+    def fake_download_bytes_from_s3(key):
+        captured.append(key)
+        if key == "old-id/working/current.png":
+            raise RuntimeError("not a working image")
+        return b"old processed bytes"
+
+    monkeypatch.setattr(app, "download_bytes_from_s3", fake_download_bytes_from_s3)
+
+    response = client.get("/processed/old-id/image")
+
+    assert response.status_code == 200
+    assert response.content == b"old processed bytes"
+    assert captured == [
+        "old-id/working/current.png",
+        "processed/old-id/image.png",
+    ]
