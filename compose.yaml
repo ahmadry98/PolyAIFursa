@@ -59,6 +59,8 @@ services:
     networks:
       - polyai-net
       - monitoring-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   grafana:
     image: grafana/grafana
