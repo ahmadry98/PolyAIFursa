@@ -3,8 +3,6 @@ services:
     image: "${FRONTEND_IMAGE}:${FRONTEND_IMAGE_TAG}"
     ports:
       - "3000:3000"
-    depends_on:
-      - agent
     networks:
       - polyai-net
 
@@ -38,12 +36,16 @@ services:
       - "9000:9000"
     networks:
       - polyai-net 
-  node-exporter:
-    image: prom/node-exporter
-    ports:
-      - "9100:9100"
-    networks:
-      - monitoring-net
+  node_exporter:
+    image: quay.io/prometheus/node-exporter:latest
+    container_name: node_exporter
+    command:
+      - '--path.rootfs=/host'
+    network_mode: host
+    pid: host
+    restart: unless-stopped
+    volumes:
+      - '/:/host:ro,rslave'
   prometheus:
     image: prom/prometheus
     ports:
