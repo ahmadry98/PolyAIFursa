@@ -48,6 +48,9 @@ services/frontend/.next/
 services/frontend/node_modules/
 services/frontend/out/
 
+# Generated/imported Grafana dashboards
+monitoring/grafana/dashboards/*.json
+
 Ahmad-Key.pem
 *.pem
 AWSCLIV2.pkg
