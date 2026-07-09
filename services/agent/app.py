@@ -128,7 +128,11 @@ def get_prediction_image(uid: str):
         )
 
     content_type = response.headers.get("content-type", "image/jpeg")
-    return Response(content=response.content, media_type=content_type)
+    return Response(
+        content=response.content,
+        media_type=content_type,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/processed/{image_id}/image")
@@ -148,7 +152,11 @@ def get_processed_image(image_id: str):
                 detail="Image not found",
             ) from fallback_error
 
-    return Response(content=image_bytes, media_type="image/png")
+    return Response(
+        content=image_bytes,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/health")

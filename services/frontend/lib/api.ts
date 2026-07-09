@@ -32,11 +32,12 @@ export async function sendMessage(messages: ChatMessage[]): Promise<ChatResponse
 
   const data = await res.json() as ChatResponse;
   const annotatedImageUrl = data.annotated_image_url
-    ? new URL(data.annotated_image_url, AGENT_URL).toString()
+    ? new URL(data.annotated_image_url, AGENT_URL)
     : null;
+  annotatedImageUrl?.searchParams.set("v", Date.now().toString());
 
   return {
     ...data,
-    annotated_image_url: annotatedImageUrl,
+    annotated_image_url: annotatedImageUrl?.toString() ?? null,
   };
 }
