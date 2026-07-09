@@ -209,6 +209,70 @@ def test_chat_recovers_working_image_state_from_previous_response(monkeypatch):
     assert captured["working_s3_key"] == "chat-existing/working/current.png"
 
 
+def test_chat_prefers_processed_image_over_older_uploaded_image(monkeypatch):
+    captured = {}
+
+    def fake_run_agent(history, max_iterations=10):
+        captured["image"] = app._current_image_b64.get()
+        captured["chat_id"] = app._current_chat_id.get()
+        captured["working_s3_key"] = app._working_s3_key.get()
+        return {
+            "response": "Edited the already processed image.",
+            "prediction_id": None,
+            "annotated_image": None,
+            "annotated_image_url": "/processed/chat-existing/image",
+            "agent_loop_time_s": 0.1,
+            "iterations": 1,
+            "tools_called": [],
+            "context_limit_exceeded": False,
+            "tokens_used": {
+                "input": 0,
+                "output": 0,
+                "total": 0,
+            },
+        }
+
+    def fail_if_new_working_image_is_initialized(_image):
+        raise AssertionError("older uploaded image should not start a new edit chain")
+
+    monkeypatch.setattr(app, "run_agent", fake_run_agent)
+    monkeypatch.setattr(
+        app,
+        "_init_working_image_in_s3",
+        fail_if_new_working_image_is_initialized,
+    )
+
+    response = client.post(
+        "/chat",
+        json={
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "blur the first person on the left",
+                    "image_base64": "aW1hZ2UtYnl0ZXM=",
+                },
+                {
+                    "role": "assistant",
+                    "content": "Blurred the first person on the left.",
+                    "annotated_image_url": (
+                        "http://dev.ahmad.fursa.click:8000"
+                        "/processed/chat-existing/image"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": "rotate the first person on the right",
+                },
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["image"] is None
+    assert captured["chat_id"] == "chat-existing"
+    assert captured["working_s3_key"] == "chat-existing/working/current.png"
+
+
 def test_chat_multi_edit_uses_plan_executor_without_llm(monkeypatch):
     image = Image.new("RGB", (80, 40), "white")
     image_buffer = io.BytesIO()

@@ -71,11 +71,13 @@ def chat(request: ChatRequest):
                 content = msg.content
             lc_messages.append(HumanMessage(content=content))
         else:
-            latest_chat_id = (
+            processed_chat_id = (
                 _chat_id_from_processed_url(msg.annotated_image_url)
                 or _chat_id_from_processed_url(msg.image_url)
-                or latest_chat_id
             )
+            if processed_chat_id:
+                latest_chat_id = processed_chat_id
+                latest_image = None
             lc_messages.append(AIMessage(content=msg.content))
 
     working_s3_key = None
