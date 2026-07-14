@@ -1,55 +1,49 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: frontend
+  name: img-proc-mcp
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: frontend
+      app: img-proc-mcp
   template:
     metadata:
       labels:
-        app: frontend
+        app: img-proc-mcp
     spec:
       containers:
-        - name: frontend
-          image: docker.io/ahmadray98/polyai-fursa-frontend:latest
+        - name: img-proc-mcp
+          image: docker.io/ahmadray98/polyai-fursa-img-proc-mcp:latest
           imagePullPolicy: Always
           ports:
-            - containerPort: 3000
-          env:
-            - name: AGENT_SERVICE_URL
-              value: http://agent-svc:8000
+            - containerPort: 9000
           readinessProbe:
-            httpGet:
-              path: /
-              port: 3000
+            tcpSocket:
+              port: 9000
             initialDelaySeconds: 10
             periodSeconds: 10
           livenessProbe:
-            httpGet:
-              path: /
-              port: 3000
+            tcpSocket:
+              port: 9000
             initialDelaySeconds: 30
             periodSeconds: 20
           resources:
             requests:
-              cpu: "100m"
+              cpu: "50m"
               memory: "128Mi"
             limits:
-              cpu: "500m"
+              cpu: "300m"
               memory: "512Mi"
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: frontend-svc
+  name: img-proc-mcp-svc
 spec:
-  type: NodePort
+  type: ClusterIP
   selector:
-    app: frontend
+    app: img-proc-mcp
   ports:
-    - port: 3000
-      targetPort: 3000
-      nodePort: 30080
+    - port: 9000
+      targetPort: 9000

@@ -26,7 +26,7 @@ spec:
             - name: YOLO_SERVICE_URL
               value: http://yolo-svc:8080
             - name: IMG_PROC_MCP_URL
-              value: http://img-proc-mcp-svc:8000
+              value: http://img-proc-mcp-svc:9000
           readinessProbe:
             httpGet:
               path: /health
@@ -52,10 +52,9 @@ kind: Service
 metadata:
   name: agent-svc
 spec:
-  type: NodePort
+  type: ClusterIP
   selector:
     app: agent
   ports:
     - port: 8000
       targetPort: 8000
-      nodePort: 30081
