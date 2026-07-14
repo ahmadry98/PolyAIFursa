@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: yolo-frontend-lb-svc
+spec:
+  type: LoadBalancer
+  selector:
+    app: yolo-frontend
+  ports:
+    - port: 80
+      targetPort: 3000

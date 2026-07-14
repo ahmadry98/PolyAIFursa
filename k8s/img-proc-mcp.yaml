@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: img-proc-mcp
+  namespace: workloads-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: img-proc-mcp
+  template:
+    metadata:
+      labels:
+        app: img-proc-mcp
+    spec:
+      containers:
+      - name: img-proc-mcp
+        image: docker.io/ahmadray98/polyai-fursa-img-proc-mcp:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 9000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: img-proc-mcp-svc
+  namespace: workloads-lab
+spec:
+  selector:
+    app: img-proc-mcp
+  ports:
+  - port: 8000
+    targetPort: 9000

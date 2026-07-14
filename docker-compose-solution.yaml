@@ -1,0 +1,47 @@
+services:
+
+  yolo-service:
+    image: alonithuji/yolo-service:0.0.2
+    networks:
+      - yolo-net
+
+  yolo-frontend:
+    image: alonithuji/yolo-frontend:0.0.2
+    ports:
+      - "3000:3000"
+    environment:
+      - YOLO_API_URL=http://yolo-service:8080
+    networks:
+      - yolo-net
+    depends_on:
+      - yolo-service
+
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    networks:
+      - yolo-net
+      - monitoring-net
+    depends_on:
+      - yolo-service
+
+  grafana:
+    image: grafana/grafana
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - monitoring-net
+    depends_on:
+      - prometheus
+
+networks:
+  yolo-net:
+    driver: bridge
+  monitoring-net:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:

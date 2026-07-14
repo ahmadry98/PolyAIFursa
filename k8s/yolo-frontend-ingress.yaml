@@ -1,0 +1,17 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: yolo-frontend-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: <your-load-balancer-hostname>
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: yolo-frontend-svc
+                port:
+                  number: 3000

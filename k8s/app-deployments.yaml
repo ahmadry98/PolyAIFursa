@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: workloads-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+      - name: frontend
+        image: docker.io/ahmadray98/polyai-fursa-frontend:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-svc
+  namespace: workloads-lab
+spec:
+  selector:
+    app: frontend
+  ports:
+  - port: 3000
+    targetPort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent
+  namespace: workloads-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent
+  template:
+    metadata:
+      labels:
+        app: agent
+    spec:
+      containers:
+      - name: agent
+        image: docker.io/ahmadray98/polyai-fursa-agent:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+        env:
+        - name: MODEL
+          value: "bedrock/openai.gpt-oss-20b-1:0"
+        - name: AWS_S3_BUCKET
+          value: "ahmad-polyai-images"
+        - name: YOLO_SERVICE_URL
+          value: "http://yolo-svc:8080"
+        - name: IMG_PROC_MCP_URL
+          value: "http://img-proc-mcp-svc:8000"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-svc
+  namespace: workloads-lab
+spec:
+  selector:
+    app: agent
+  ports:
+  - port: 8000
+    targetPort: 8000
