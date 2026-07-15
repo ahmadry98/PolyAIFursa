@@ -4,7 +4,7 @@
 
 Task 5 is implemented and verified.
 
-The Docker Compose application was migrated to Kubernetes using plain manifests in `infra/k8s/`. The cluster has separate `dev` and `prod` namespaces. The frontend is exposed through NodePort, while the backend services remain internal through ClusterIP services. Prometheus and Grafana run in Kubernetes with EBS-backed persistent storage. Agent metrics are exposed through `/metrics`, scraped by Prometheus, and visualized in Grafana. The old Docker Compose EC2 deployment keeps running and sends logs to S3 using Fluent Bit. A local Observability MCP server can query Prometheus and read S3 logs.
+The Docker Compose application was migrated to Kubernetes using plain manifests in `infra/k8s/`. The cluster has separate `dev` and `prod` namespaces. The frontend and backend services use internal ClusterIP services, and the frontend is reached for testing through `kubectl port-forward`. Prometheus and Grafana run in Kubernetes with EBS-backed persistent storage. Agent metrics are exposed through `/metrics`, scraped by Prometheus, and visualized in Grafana. The old Docker Compose EC2 deployment keeps running and sends logs to S3 using Fluent Bit. A local Observability MCP server can query Prometheus and read S3 logs.
 
 ## Kubernetes Deployment
 
@@ -25,10 +25,16 @@ Namespaces:
 - `dev`
 - `prod`
 
-Exposed services:
+Frontend access:
 
-- Dev frontend: `http://34.193.127.4:30080`
-- Prod frontend: `http://34.193.127.4:30082`
+- Dev:
+  - run `kubectl port-forward -n dev svc/frontend-svc 3000:3000`
+  - open `http://localhost:3000`
+- Prod:
+  - run `kubectl port-forward -n prod svc/frontend-svc 3001:3000`
+  - open `http://localhost:3001`
+
+Ports `3000` and `3001` are local ports on the machine running `kubectl port-forward`.
 
 Internal services:
 
@@ -42,7 +48,7 @@ Internal services:
 
 ## Safe Apply Commands
 
-Do not apply the whole `infra/k8s/` folder to `prod`, because it contains both `frontend.yaml` and `frontend-prod.yaml`.
+Do not apply the whole `infra/k8s/` folder to `prod`, because it contains both the dev frontend file and the prod frontend file.
 
 Do not run:
 
@@ -87,8 +93,8 @@ kubectl top pods -n prod
 Expected state:
 
 - All application pods are `1/1 Running`.
-- Dev frontend service is NodePort `30080`.
-- Prod frontend service is NodePort `30082`.
+- Dev frontend service is `ClusterIP`.
+- Prod frontend service is `ClusterIP`.
 - Backend services are `ClusterIP`.
 - Grafana and Prometheus PVCs are `Bound`.
 - HPA targets show real CPU values, not `<unknown>`.
@@ -283,9 +289,9 @@ Verified result:
 ## Known Limitations
 
 - CI/CD is not implemented because it was not required by the task.
-- Ingress is not implemented because NodePort is enough for the current cluster setup.
+- Ingress is not implemented because `kubectl port-forward` is enough for the current testing workflow.
 - Kubernetes Fluent Bit is not implemented because the task required Fluent Bit for the old Docker Compose EC2 deployment.
-- The current raw-manifest layout requires applying prod file-by-file because dev and prod frontend NodePorts live in separate frontend files.
+- The current raw-manifest layout requires applying prod file-by-file because dev and prod frontend settings live in separate frontend files.
 
 ## Final Status
 
