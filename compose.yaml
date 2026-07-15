@@ -76,6 +76,23 @@ services:
     networks:
       - monitoring-net
 
+  fluent-bit:
+    image: fluent/fluent-bit:4.2.7
+    environment:
+      AWS_REGION: "${AWS_REGION:-us-east-1}"
+      FLUENT_BIT_S3_BUCKET: "${FLUENT_BIT_S3_BUCKET:-ahmad-polyai-logs}"
+    volumes:
+      - ./fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/log:/var/log
+    depends_on:
+      - frontend
+      - agent
+      - yolo
+      - img-proc-mcp
+    networks:
+      - monitoring-net
+
 
 volumes:
   prometheus-data:
