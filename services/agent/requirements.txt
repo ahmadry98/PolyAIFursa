@@ -15,3 +15,5 @@ httpx
 pydantic
 boto3
 pytest
+pillow
+mcp

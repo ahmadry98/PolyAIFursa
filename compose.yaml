@@ -1,41 +1,52 @@
 services:
   frontend:
-    build:
-      context: ./services/frontend
-      args:
-        NEXT_PUBLIC_AGENT_URL: "${NEXT_PUBLIC_AGENT_URL:-http://localhost:8000}"
+    image: "${FRONTEND_IMAGE}:${FRONTEND_IMAGE_TAG}"
     ports:
       - "3000:3000"
-    depends_on:
-      - agent
     networks:
       - polyai-net
 
   agent:
-    build:
-      context: ./services/agent
+    image: "${AGENT_IMAGE}:${AGENT_IMAGE_TAG}"
     env_file:
       - ./services/agent/.env
     environment:
       YOLO_SERVICE_URL: http://yolo:8080
+      IMG_PROC_MCP_URL: http://img-proc-mcp:9000
       AWS_REGION: "${AWS_REGION:-us-east-1}"
     ports:
       - "8000:8000"
     depends_on:
       - yolo
+      - img-proc-mcp
     networks:
       - polyai-net
 
   yolo:
-    build:
-      context: ./services/yolo
+    image: "${YOLO_IMAGE}:${YOLO_IMAGE_TAG}"
     env_file:
       - ./services/agent/.env
     environment:
       AWS_REGION: "${AWS_REGION:-us-east-1}"
     networks:
       - polyai-net
-
+  img-proc-mcp:
+    image: "${IMG_PROC_MCP_IMAGE}:${IMG_PROC_MCP_IMAGE_TAG}"
+    ports:
+      - "9000:9000"
+    networks:
+      - polyai-net 
+  node-exporter:
+    image: quay.io/prometheus/node-exporter:latest
+    container_name: node-exporter
+    command:
+      - '--path.rootfs=/host'
+      - '--collector.processes'
+    network_mode: host
+    pid: host
+    restart: unless-stopped
+    volumes:
+      - '/:/host:ro,rslave'
   prometheus:
     image: prom/prometheus
     ports:
@@ -45,9 +56,12 @@ services:
       - prometheus-data:/prometheus
     depends_on:
       - yolo
+      - node-exporter
     networks:
       - polyai-net
       - monitoring-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   grafana:
     image: grafana/grafana
@@ -55,10 +69,13 @@ services:
       - "3001:3000"
     volumes:
       - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
     networks:
       - monitoring-net
+
 
 volumes:
   prometheus-data:

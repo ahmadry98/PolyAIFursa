@@ -1,5 +1,18 @@
+# Local laptop/development override only.
+#
+# Do not use this file on EC2. It mounts ~/.aws and sets AWS_PROFILE for local
+# credentials. On EC2, use compose.yaml only.
 services:
+  frontend:
+    build:
+      context: ./services/frontend
+      args:
+        NEXT_PUBLIC_AGENT_URL: "${NEXT_PUBLIC_AGENT_URL:-http://localhost:8000}"
+
   agent:
+    build:
+      context: .
+      dockerfile: services/agent/Dockerfile
     environment:
       AWS_PROFILE: "${AWS_PROFILE:-default}"
       AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
@@ -8,9 +21,17 @@ services:
       - ${HOME}/.aws:/aws:ro
 
   yolo:
+    build:
+      context: ./services/yolo
+    ports:
+      - "8080:8080"
     environment:
       AWS_PROFILE: "${AWS_PROFILE:-default}"
       AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
       AWS_CONFIG_FILE: /aws/config
     volumes:
       - ${HOME}/.aws:/aws:ro
+
+  img-proc-mcp:
+    build:
+      context: ./services/img-proc-mcp
