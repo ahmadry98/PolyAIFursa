@@ -62,3 +62,9 @@ AWSCLIV2.pkg
 .claude/skills/writing-skills/testing-skills-with-subagents.md
 .claude/skills/writing-skills/examples/CLAUDE_MD_TESTING.md
 skills-lock.json
+
+# Keep local editor files ignored, but commit the MCP server registration required
+# by the observability task.
+!.vscode/
+.vscode/*
+!.vscode/mcp.json
