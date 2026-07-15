@@ -41,6 +41,16 @@ def test_health():
     assert response.json() == {"status": "ok"}
 
 
+def test_metrics_endpoint_exposes_prometheus_metrics():
+    response = client.get("/metrics")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert "agent_chat_requests_total" in response.text
+    assert "agent_chat_request_latency_seconds" in response.text
+    assert "agent_chat_tokens_total" in response.text
+
+
 def test_chat_api_mocks_run_agent(monkeypatch):
     captured = {}
 
@@ -100,6 +110,38 @@ def test_chat_api_mocks_run_agent(monkeypatch):
     assert isinstance(captured["history"][0], HumanMessage)
     assert "aW1hZ2UtYnl0ZXM=" not in captured["history"][0].content
     assert app._current_image_b64.get() is None
+
+    metrics_response = client.get("/metrics")
+    assert 'agent_chat_requests_total{status="success"}' in metrics_response.text
+    assert 'agent_chat_tokens_total{type="input"}' in metrics_response.text
+    assert 'agent_chat_tokens_total{type="output"}' in metrics_response.text
+    assert 'agent_chat_tokens_total{type="total"}' in metrics_response.text
+
+
+def test_chat_records_error_metrics(monkeypatch):
+    error_client = TestClient(app.app, raise_server_exceptions=False)
+
+    def fake_run_agent(history, max_iterations=10):
+        raise RuntimeError("agent failed")
+
+    monkeypatch.setattr(app, "run_agent", fake_run_agent)
+
+    response = error_client.post(
+        "/chat",
+        json={
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hello",
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 500
+
+    metrics_response = error_client.get("/metrics")
+    assert 'agent_chat_requests_total{status="error"}' in metrics_response.text
 
 
 def test_chat_object_edit_goes_through_run_agent(monkeypatch):
