@@ -13,7 +13,6 @@ Implemented manifests:
 - `infra/k8s/00-namespaces.yaml`
 - `infra/k8s/agent.yaml`
 - `infra/k8s/frontend.yaml`
-- `infra/k8s/frontend-prod.yaml`
 - `infra/k8s/yolo.yaml`
 - `infra/k8s/img-proc-mcp.yaml`
 - `infra/k8s/prometheus.yaml`
@@ -50,15 +49,9 @@ Internal services:
 
 ## Safe Apply Commands
 
-Do not apply the whole `infra/k8s/` folder to `prod`, because it contains both the dev frontend file and the prod frontend file.
+The same frontend manifest is used for both `dev` and `prod`. The target namespace is selected by the `-n` flag.
 
-Do not run:
-
-```bash
-kubectl apply -n prod -f infra/k8s/
-```
-
-Use this instead:
+Use:
 
 ```bash
 kubectl apply -f infra/k8s/00-namespaces.yaml
@@ -72,7 +65,7 @@ kubectl apply -n dev -f infra/k8s/grafana.yaml
 kubectl apply -n dev -f infra/k8s/hpa.yaml
 
 kubectl apply -n prod -f infra/k8s/agent.yaml
-kubectl apply -n prod -f infra/k8s/frontend-prod.yaml
+kubectl apply -n prod -f infra/k8s/frontend.yaml
 kubectl apply -n prod -f infra/k8s/yolo.yaml
 kubectl apply -n prod -f infra/k8s/img-proc-mcp.yaml
 kubectl apply -n prod -f infra/k8s/prometheus.yaml
@@ -293,7 +286,6 @@ Verified result:
 - CI/CD is not implemented because it was not required by the task.
 - Ingress is not implemented because `kubectl port-forward` is enough for the current testing workflow.
 - Kubernetes Fluent Bit is not implemented because the task required Fluent Bit for the old Docker Compose EC2 deployment.
-- The current raw-manifest layout requires applying prod file-by-file because dev and prod frontend settings live in separate frontend files.
 - The browser-direct frontend flow requires an agent port-forward, because `agent-svc` is intentionally still a private `ClusterIP` service.
 
 ## Final Status
