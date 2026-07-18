@@ -4,7 +4,7 @@
 
 Task 5 is implemented and verified.
 
-The Docker Compose application was migrated to Kubernetes using plain manifests in `infra/k8s/`. The cluster has separate `dev` and `prod` namespaces. The frontend and backend services use internal ClusterIP services, and the frontend is reached for testing through `kubectl port-forward`. Prometheus and Grafana run in Kubernetes with EBS-backed persistent storage. Agent metrics are exposed through `/metrics`, scraped by Prometheus, and visualized in Grafana. The old Docker Compose EC2 deployment keeps running and sends logs to S3 using Fluent Bit. A local Observability MCP server can query Prometheus and read S3 logs.
+The Docker Compose application was migrated to Kubernetes using plain manifests in `infra/k8s/`. The cluster has separate `dev` and `prod` namespaces. The frontend and backend services use internal ClusterIP services and are reached for testing through `kubectl port-forward`. The browser calls the agent directly through a local agent port-forward, while YOLO and the image-processing service remain internal. Prometheus and Grafana run in Kubernetes with EBS-backed persistent storage. Agent metrics are exposed through `/metrics`, scraped by Prometheus, and visualized in Grafana. The old Docker Compose EC2 deployment keeps running and sends logs to S3 using Fluent Bit. A local Observability MCP server can query Prometheus and read S3 logs.
 
 ## Kubernetes Deployment
 
@@ -29,12 +29,14 @@ Frontend access:
 
 - Dev:
   - run `kubectl port-forward -n dev svc/frontend-svc 3000:3000`
+  - run `kubectl port-forward -n dev svc/agent-svc 8000:8000`
   - open `http://localhost:3000`
 - Prod:
   - run `kubectl port-forward -n prod svc/frontend-svc 3001:3000`
+  - run `kubectl port-forward -n prod svc/agent-svc 8000:8000`
   - open `http://localhost:3001`
 
-Ports `3000` and `3001` are local ports on the machine running `kubectl port-forward`.
+Ports `3000`, `3001`, and `8000` are local ports on the machine running `kubectl port-forward`. The Kubernetes services still expose only their normal service ports inside the cluster. If dev and prod must be tested at the same time, use separate local agent ports and build or configure the frontend with the matching `NEXT_PUBLIC_AGENT_URL`.
 
 Internal services:
 
@@ -292,6 +294,7 @@ Verified result:
 - Ingress is not implemented because `kubectl port-forward` is enough for the current testing workflow.
 - Kubernetes Fluent Bit is not implemented because the task required Fluent Bit for the old Docker Compose EC2 deployment.
 - The current raw-manifest layout requires applying prod file-by-file because dev and prod frontend settings live in separate frontend files.
+- The browser-direct frontend flow requires an agent port-forward, because `agent-svc` is intentionally still a private `ClusterIP` service.
 
 ## Final Status
 

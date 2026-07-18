@@ -9,9 +9,12 @@ RUN npm ci
 
 FROM node:20-trixie-slim AS builder
 ARG NPM_VERSION=10.9.4
+ARG NEXT_PUBLIC_AGENT_URL=http://localhost:8000
 RUN npm install -g npm@${NPM_VERSION}
 
 WORKDIR /app
+
+ENV NEXT_PUBLIC_AGENT_URL=${NEXT_PUBLIC_AGENT_URL}
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -27,6 +30,7 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
+ENV NEXT_PUBLIC_AGENT_URL=http://localhost:8000
 
 WORKDIR /app
 

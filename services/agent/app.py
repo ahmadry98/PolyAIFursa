@@ -50,7 +50,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
+        "http://localhost:3001",
         "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
         "http://32.197.155.17:3000",
         "http://dev.ahmad.fursa.click:3000",
         "http://67.202.49.42:3000",
