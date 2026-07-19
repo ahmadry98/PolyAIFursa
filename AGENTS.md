@@ -64,3 +64,8 @@ Implement the ReAct loop manually in `run_agent()` inside `services/agent/app.py
 
 ### what do we use
 we have claude writing skill and we use it , so you might need to download it 
+
+
+## Kubernetes
+
+When working with Kubernetes manifests, Helm charts, or Kustomize overlays, follow the workflow in `.agents/skills/kubernetes-skill/SKILL.md`. Load references from `.agents/skills/kubernetes-skill/references/` as needed.
