@@ -167,5 +167,6 @@ def test_get_cpu_usage_uses_expected_prometheus_query(monkeypatch):
 
     assert app.get_cpu_usage("prod", minutes=15) == {"status": "success"}
     assert captured["environment"] == "prod"
+    assert 'environment="prod"' in captured["query"]
     assert 'job=~"agent|frontend|yolo"' in captured["query"]
     assert "[15m]" in captured["query"]

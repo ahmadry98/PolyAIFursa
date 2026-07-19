@@ -4,7 +4,7 @@
 
 Task 5 is implemented and verified.
 
-The Docker Compose application was migrated to Kubernetes using plain manifests in `infra/k8s/`. The cluster has separate `dev` and `prod` namespaces. The frontend and backend services use internal ClusterIP services and are reached for testing through `kubectl port-forward`. The browser calls the agent directly through a local agent port-forward, while YOLO and the image-processing service remain internal. Prometheus and Grafana run in Kubernetes with EBS-backed persistent storage. Agent metrics are exposed through `/metrics`, scraped by Prometheus, and visualized in Grafana. The old Docker Compose EC2 deployment keeps running and sends logs to S3 using Fluent Bit. A local Observability MCP server can query Prometheus and read S3 logs.
+The Docker Compose application was migrated to Kubernetes using plain manifests in `infra/k8s/`. The cluster has separate `dev` and `prod` namespaces for the application workloads, plus one shared `monitoring` namespace for Prometheus and Grafana. The frontend and backend services use internal ClusterIP services and are reached for testing through `kubectl port-forward`. The browser calls the agent directly through a local agent port-forward, while YOLO and the image-processing service remain internal. One Prometheus instance scrapes both dev and prod using Kubernetes DNS names, and one Grafana dashboard shows both environments. Agent metrics are exposed through `/metrics`, scraped by Prometheus, and visualized in Grafana. The old Docker Compose EC2 deployment keeps running and sends logs to S3 using Fluent Bit. A local Observability MCP server can query Prometheus and read S3 logs.
 
 ## Kubernetes Deployment
 
@@ -23,6 +23,7 @@ Namespaces:
 
 - `dev`
 - `prod`
+- `monitoring`
 
 Frontend access:
 
@@ -42,14 +43,14 @@ Internal services:
 - `agent-svc`
 - `yolo-svc`
 - `img-proc-mcp-svc`
-- `prometheus-svc`
-- `grafana-svc`
+- `prometheus-svc` in the `monitoring` namespace
+- `grafana-svc` in the `monitoring` namespace
 
 `node-exporter` was not migrated to Kubernetes, as required.
 
 ## Safe Apply Commands
 
-The same frontend manifest is used for both `dev` and `prod`. The target namespace is selected by the `-n` flag.
+The same application manifests are used for both `dev` and `prod`. The target namespace is selected by the `-n` flag. Prometheus and Grafana are shared resources and are deployed once into the `monitoring` namespace.
 
 Use:
 
@@ -60,17 +61,16 @@ kubectl apply -n dev -f infra/k8s/agent.yaml
 kubectl apply -n dev -f infra/k8s/frontend.yaml
 kubectl apply -n dev -f infra/k8s/yolo.yaml
 kubectl apply -n dev -f infra/k8s/img-proc-mcp.yaml
-kubectl apply -n dev -f infra/k8s/prometheus.yaml
-kubectl apply -n dev -f infra/k8s/grafana.yaml
 kubectl apply -n dev -f infra/k8s/hpa.yaml
 
 kubectl apply -n prod -f infra/k8s/agent.yaml
 kubectl apply -n prod -f infra/k8s/frontend.yaml
 kubectl apply -n prod -f infra/k8s/yolo.yaml
 kubectl apply -n prod -f infra/k8s/img-proc-mcp.yaml
-kubectl apply -n prod -f infra/k8s/prometheus.yaml
-kubectl apply -n prod -f infra/k8s/grafana.yaml
 kubectl apply -n prod -f infra/k8s/hpa.yaml
+
+kubectl apply -f infra/k8s/prometheus.yaml
+kubectl apply -f infra/k8s/grafana.yaml
 ```
 
 ## Verification Commands
@@ -80,6 +80,7 @@ Cluster health:
 ```bash
 kubectl get pods,svc,pvc,hpa -n dev
 kubectl get pods,svc,pvc,hpa -n prod
+kubectl get pods,svc,pvc -n monitoring
 kubectl top nodes
 kubectl top pods -n dev
 kubectl top pods -n prod
@@ -91,13 +92,14 @@ Expected state:
 - Dev frontend service is `ClusterIP`.
 - Prod frontend service is `ClusterIP`.
 - Backend services are `ClusterIP`.
-- Grafana and Prometheus PVCs are `Bound`.
+- The shared Grafana and Prometheus PVCs in `monitoring` are `Bound`.
 - HPA targets show real CPU values, not `<unknown>`.
 
 Latest verified state:
 
-- Dev pods: agent, frontend, grafana, img-proc-mcp, prometheus, yolo all running.
-- Prod pods: agent, frontend, grafana, img-proc-mcp, prometheus, yolo all running.
+- Dev pods: agent, frontend, img-proc-mcp, yolo all running.
+- Prod pods: agent, frontend, img-proc-mcp, yolo all running.
+- Monitoring pods: prometheus and grafana running.
 - Node usage was healthy:
   - control plane: about `7%` CPU, `38%` memory
   - worker: about `4%` CPU, `63%` memory
@@ -131,7 +133,7 @@ Metrics Server was installed and fixed so `kubectl top` and HPA CPU targets work
 
 ## Prometheus and Grafana
 
-Prometheus and Grafana are deployed in Kubernetes using plain manifests.
+Prometheus and Grafana are deployed once in Kubernetes using plain manifests in the `monitoring` namespace.
 
 Persistent storage:
 
@@ -146,15 +148,17 @@ curl 'http://localhost:9090/api/v1/query?query=up'
 
 Verified targets:
 
-- `agent-svc:8000`
-- `yolo-svc:8080`
+- `agent-svc.dev.svc.cluster.local:8000` with `environment=dev`
+- `agent-svc.prod.svc.cluster.local:8000` with `environment=prod`
+- `yolo-svc.dev.svc.cluster.local:8080` with `environment=dev`
+- `yolo-svc.prod.svc.cluster.local:8080` with `environment=prod`
 - `prometheus`
 
 Grafana dashboard:
 
 - `infra/grafana/dashboards/agent.json`
 
-The dashboard was imported into Grafana and showed agent latency data.
+The dashboard was imported into Grafana and shows both dev and prod by using the Prometheus `environment` label.
 
 ## Agent Metrics
 
@@ -244,21 +248,15 @@ Environment variables:
 ```bash
 export PROD_PROMETHEUS_URL=http://localhost:9090
 export PROD_S3_LOGS_BUCKET=ahmad-polyai-logs
-export DEV_PROMETHEUS_URL=http://localhost:9091
+export DEV_PROMETHEUS_URL=http://localhost:9090
 export DEV_S3_LOGS_BUCKET=ahmad-polyai-logs
 export AWS_REGION=us-east-1
 ```
 
-Prod Prometheus port-forward:
+Shared Prometheus port-forward:
 
 ```bash
-kubectl port-forward -n prod svc/prometheus-svc 9090:9090
-```
-
-Dev Prometheus port-forward:
-
-```bash
-kubectl port-forward -n dev svc/prometheus-svc 9091:9090
+kubectl port-forward -n monitoring svc/prometheus-svc 9090:9090
 ```
 
 Verification command:

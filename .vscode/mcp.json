@@ -5,7 +5,7 @@
       "command": ".venv/bin/python",
       "args": ["services/observability-mcp/app.py"],
       "env": {
-        "DEV_PROMETHEUS_URL": "http://localhost:9091",
+        "DEV_PROMETHEUS_URL": "http://localhost:9090",
         "PROD_PROMETHEUS_URL": "http://localhost:9090",
         "DEV_S3_LOGS_BUCKET": "ahmad-polyai-logs",
         "PROD_S3_LOGS_BUCKET": "ahmad-polyai-logs",

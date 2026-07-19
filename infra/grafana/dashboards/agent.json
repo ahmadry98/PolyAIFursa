@@ -112,8 +112,8 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum by (status) (rate(agent_chat_requests_total[1m]) * 60)",
-          "legendFormat": "{{status}}",
+          "expr": "sum by (environment, status) (rate(agent_chat_requests_total[1m]) * 60)",
+          "legendFormat": "{{environment}} {{status}}",
           "range": true,
           "refId": "A"
         }
@@ -204,8 +204,8 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, rate(agent_chat_request_latency_seconds_bucket[5m]))",
-          "legendFormat": "p50",
+          "expr": "histogram_quantile(0.50, sum by (environment, le) (rate(agent_chat_request_latency_seconds_bucket[5m])))",
+          "legendFormat": "{{environment}} p50",
           "range": true,
           "refId": "A"
         },
@@ -215,8 +215,8 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, rate(agent_chat_request_latency_seconds_bucket[5m]))",
-          "legendFormat": "p95",
+          "expr": "histogram_quantile(0.95, sum by (environment, le) (rate(agent_chat_request_latency_seconds_bucket[5m])))",
+          "legendFormat": "{{environment}} p95",
           "range": true,
           "refId": "B"
         },
@@ -226,8 +226,8 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, rate(agent_chat_request_latency_seconds_bucket[5m]))",
-          "legendFormat": "p99",
+          "expr": "histogram_quantile(0.99, sum by (environment, le) (rate(agent_chat_request_latency_seconds_bucket[5m])))",
+          "legendFormat": "{{environment}} p99",
           "range": true,
           "refId": "C"
         }
@@ -318,8 +318,8 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(rate(agent_chat_requests_total{status=\"error\"}[5m])) / clamp_min(sum(rate(agent_chat_requests_total[5m])), 0.001)",
-          "legendFormat": "error rate",
+          "expr": "sum by (environment) (rate(agent_chat_requests_total{status=\"error\"}[5m])) / clamp_min(sum by (environment) (rate(agent_chat_requests_total[5m])), 0.001)",
+          "legendFormat": "{{environment}} error rate",
           "range": true,
           "refId": "A"
         }
@@ -410,8 +410,8 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum by (type) (rate(agent_chat_tokens_total{type=~\"input|output\"}[5m]) * 60)",
-          "legendFormat": "{{type}}",
+          "expr": "sum by (environment, type) (rate(agent_chat_tokens_total{type=~\"input|output\"}[5m]) * 60)",
+          "legendFormat": "{{environment}} {{type}}",
           "range": true,
           "refId": "A"
         }

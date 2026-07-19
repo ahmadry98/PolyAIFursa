@@ -133,12 +133,13 @@ def query_prometheus(environment: Environment, query: str) -> dict[str, Any]:
 @mcp.tool()
 def get_cpu_usage(environment: Environment, minutes: int = 10) -> dict[str, Any]:
     """Return recent CPU usage for the agent, frontend, and yolo services."""
+    env = _env_name(environment)
     window = f"{minutes}m"
     query = (
         "sum by (job) (rate(process_cpu_seconds_total"
-        f'{{job=~"agent|frontend|yolo"}}[{window}]))'
+        f'{{environment="{env}",job=~"agent|frontend|yolo"}}[{window}]))'
     )
-    return query_prometheus(environment, query)
+    return query_prometheus(env, query)
 
 
 if __name__ == "__main__":
