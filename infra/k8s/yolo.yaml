@@ -4,6 +4,10 @@ metadata:
   name: yolo
 spec:
   replicas: 1
+  # This node cannot schedule old and new YOLO pods at the same time.
+  # Recreate guarantees that only one memory-heavy YOLO pod exists.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: yolo

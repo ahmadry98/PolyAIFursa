@@ -46,7 +46,8 @@ spec:
     kind: Deployment
     name: yolo
   minReplicas: 1
-  maxReplicas: 3
+  # Keep YOLO at one replica on the memory-constrained single-node cluster.
+  maxReplicas: 1
   metrics:
     - type: Resource
       resource:
