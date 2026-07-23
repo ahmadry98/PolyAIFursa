@@ -63,8 +63,25 @@ AWSCLIV2.pkg
 .claude/skills/writing-skills/examples/CLAUDE_MD_TESTING.md
 skills-lock.json
 
+# Terraform local state, provider cache, plans, and variable values
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Generated compatibility links from project skill installation
+.claude/
+
 # Keep local editor files ignored, but commit the MCP server registration required
 # by the observability task.
 !.vscode/
 .vscode/*
 !.vscode/mcp.json
+*.tf.disabled
