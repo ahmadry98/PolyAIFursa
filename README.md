@@ -35,3 +35,22 @@ Local laptop build:
 docker compose -f compose.yaml -f compose.local.yaml build --no-cache
 docker compose -f compose.yaml -f compose.local.yaml up -d
 ```
+
+## Optional AI Agent Skills
+
+The application and Terraform configuration do not require agent skills to run.
+Developers using Codex or another compatible coding agent can optionally install
+HashiCorp's agent skills for Terraform assistance:
+
+```bash
+npx skills add hashicorp/agent-skills
+```
+
+The most relevant skills for this repository are:
+
+- `terraform-style-guide`
+- `refactor-module`
+- `terraform-test` when adding Terraform tests
+
+Installed skill directories are local development tools and should not be
+committed with the application or infrastructure code.
