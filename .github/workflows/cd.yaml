@@ -1,0 +1,246 @@
+name: Build images and update GitOps manifests
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+    paths:
+      - "services/agent/**"
+      - "services/frontend/**"
+      - "services/img-proc-mcp/**"
+      - "services/yolo/**"
+      - ".github/workflows/cd.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitops-cd-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  detect-changes:
+    name: Detect changed services
+    runs-on: ubuntu-latest
+
+    outputs:
+      agent: ${{ steps.changes.outputs.agent }}
+      frontend: ${{ steps.changes.outputs.frontend }}
+      img_proc_mcp: ${{ steps.changes.outputs.img_proc_mcp }}
+      yolo: ${{ steps.changes.outputs.yolo }}
+
+    steps:
+      - name: Check out the triggering branch
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Detect service changes
+        id: changes
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          if [[ "${BEFORE_SHA}" =~ ^0+$ ]] ||
+             ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+            changed_files="$(git ls-tree -r --name-only "${AFTER_SHA}")"
+          else
+            changed_files="$(
+              git diff \
+                --name-only \
+                "${BEFORE_SHA}" \
+                "${AFTER_SHA}"
+            )"
+          fi
+
+          printf '%s\n' "${changed_files}"
+
+          workflow_changed=false
+          if grep -qx '.github/workflows/cd.yaml' <<<"${changed_files}"; then
+            workflow_changed=true
+          fi
+
+          service_changed() {
+            local service_path="$1"
+
+            if [[ "${workflow_changed}" == "true" ]] ||
+               grep -q "^services/${service_path}/" <<<"${changed_files}"; then
+              printf 'true'
+            else
+              printf 'false'
+            fi
+          }
+
+          {
+            echo "agent=$(service_changed agent)"
+            echo "frontend=$(service_changed frontend)"
+            echo "img_proc_mcp=$(service_changed img-proc-mcp)"
+            echo "yolo=$(service_changed yolo)"
+          } >> "${GITHUB_OUTPUT}"
+
+  build-and-update:
+    name: Build images and update manifests
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.agent == 'true' ||
+      needs.detect-changes.outputs.frontend == 'true' ||
+      needs.detect-changes.outputs.img_proc_mcp == 'true' ||
+      needs.detect-changes.outputs.yolo == 'true'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    env:
+      IMAGE_PREFIX: docker.io/${{ secrets.DOCKERHUB_USERNAME }}
+      IMAGE_TAG: ${{ github.sha }}
+
+    steps:
+      - name: Check out the triggering branch
+        uses: actions/checkout@v6.0.2
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Agent
+        if: needs.detect-changes.outputs.agent == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/agent/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/polyai-fursa-agent:${{ env.IMAGE_TAG }}
+
+      - name: Build and push Frontend
+        if: needs.detect-changes.outputs.frontend == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: services/frontend
+          file: services/frontend/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/polyai-fursa-frontend:${{ env.IMAGE_TAG }}
+
+      - name: Build and push Image Processing MCP
+        if: needs.detect-changes.outputs.img_proc_mcp == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: services/img-proc-mcp
+          file: services/img-proc-mcp/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/polyai-fursa-img-proc-mcp:${{ env.IMAGE_TAG }}
+
+      - name: Build and push YOLO
+        if: needs.detect-changes.outputs.yolo == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: services/yolo
+          file: services/yolo/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/polyai-fursa-yolo:${{ env.IMAGE_TAG }}
+
+      - name: Update changed service manifests
+        env:
+          AGENT_CHANGED: ${{ needs.detect-changes.outputs.agent }}
+          FRONTEND_CHANGED: ${{ needs.detect-changes.outputs.frontend }}
+          IMG_PROC_MCP_CHANGED: ${{ needs.detect-changes.outputs.img_proc_mcp }}
+          YOLO_CHANGED: ${{ needs.detect-changes.outputs.yolo }}
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            dev)
+              deploy_environment="dev"
+              ;;
+            main)
+              deploy_environment="prod"
+              ;;
+            *)
+              echo "Unsupported deployment branch: ${GITHUB_REF_NAME}" >&2
+              exit 1
+              ;;
+          esac
+
+          update_image() {
+            local manifest="$1"
+            local image_name="$2"
+            local image="${IMAGE_PREFIX}/${image_name}:${IMAGE_TAG}"
+
+            test -f "${manifest}"
+
+            sed -i -E \
+              "s#^([[:space:]]*image:[[:space:]]*).*/${image_name}:[^[:space:]]+#\\1${image}#" \
+              "${manifest}"
+
+            if ! grep -qF "image: ${image}" "${manifest}"; then
+              echo "Failed to update ${manifest}" >&2
+              exit 1
+            fi
+          }
+
+          if [[ "${AGENT_CHANGED}" == "true" ]]; then
+            update_image \
+              "infra/k8s/${deploy_environment}/agent/resources.yaml" \
+              "polyai-fursa-agent"
+          fi
+
+          if [[ "${FRONTEND_CHANGED}" == "true" ]]; then
+            update_image \
+              "infra/k8s/${deploy_environment}/frontend/resources.yaml" \
+              "polyai-fursa-frontend"
+          fi
+
+          if [[ "${IMG_PROC_MCP_CHANGED}" == "true" ]]; then
+            update_image \
+              "infra/k8s/${deploy_environment}/img-proc-mcp/resources.yaml" \
+              "polyai-fursa-img-proc-mcp"
+          fi
+
+          if [[ "${YOLO_CHANGED}" == "true" ]]; then
+            update_image \
+              "infra/k8s/${deploy_environment}/yolo/deployment.yaml" \
+              "polyai-fursa-yolo"
+          fi
+
+          git diff -- "infra/k8s/${deploy_environment}"
+
+      - name: Commit manifest updates
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add infra/k8s/dev infra/k8s/prod
+
+          if git diff --cached --quiet; then
+            echo "No manifest changes were produced." >&2
+            exit 1
+          fi
+
+          git commit \
+            -m "deploy: update ${GITHUB_REF_NAME} images to ${IMAGE_TAG}"
+
+      - name: Push development manifest updates
+        if: github.ref_name == 'dev'
+        run: git push origin HEAD:dev
+
+      - name: Open production manifest update pull request
+        if: github.ref_name == 'main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          update_branch="gitops/prod-${IMAGE_TAG}"
+
+          git switch -c "${update_branch}"
+          git push origin "${update_branch}"
+
+          gh pr create \
+            --base main \
+            --head "${update_branch}" \
+            --title "deploy: update production images to ${IMAGE_TAG}" \
+            --body "Automated production image-tag update for commit \`${IMAGE_TAG}\`."

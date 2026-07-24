@@ -1,72 +1,83 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: yolo
+  name: agent
   labels:
-    app.kubernetes.io/name: yolo
+    app.kubernetes.io/name: agent
     app.kubernetes.io/part-of: polyai-fursa
 spec:
   replicas: 1
   revisionHistoryLimit: 5
-  minReadySeconds: 10
-  strategy:
-    # YOLO is memory-heavy and this single node cannot fit two copies.
-    type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: yolo
+      app.kubernetes.io/name: agent
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: yolo
+        app.kubernetes.io/name: agent
         app.kubernetes.io/part-of: polyai-fursa
     spec:
       automountServiceAccountToken: false
-      terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: yolo
-          image: docker.io/ahmadray98/polyai-fursa-yolo:9f84011e6e7821e4422774af37e2de405b3aad32
-          imagePullPolicy: IfNotPresent
+        - name: agent
+          image: docker.io/ahmadray98/polyai-fursa-agent:latest
+          imagePullPolicy: Always
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: 8000
               protocol: TCP
           env:
+            - name: MODEL
+              value: bedrock/openai.gpt-oss-20b-1:0
+            - name: AWS_REGION
+              value: us-east-1
             - name: AWS_S3_BUCKET
               value: ahmad-polyai-images
+            - name: YOLO_SERVICE_URL
+              value: http://yolo-svc:8080
+            - name: IMG_PROC_MCP_URL
+              value: http://img-proc-mcp-svc:9000
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop:
                 - ALL
-          startupProbe:
-            httpGet:
-              path: /health
-              port: http
-            periodSeconds: 5
-            failureThreshold: 24
           readinessProbe:
             httpGet:
               path: /health
               port: http
+            initialDelaySeconds: 10
             periodSeconds: 10
-            timeoutSeconds: 3
-            failureThreshold: 2
           livenessProbe:
             httpGet:
               path: /health
               port: http
+            initialDelaySeconds: 30
             periodSeconds: 20
-            timeoutSeconds: 3
-            failureThreshold: 3
           resources:
             requests:
               cpu: 100m
-              memory: 512Mi
+              memory: 256Mi
             limits:
-              cpu: "1"
-              memory: 2Gi
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-svc
+  labels:
+    app.kubernetes.io/name: agent
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: agent
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
