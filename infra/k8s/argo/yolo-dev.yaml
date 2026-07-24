@@ -7,21 +7,19 @@ metadata:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
+
   source:
     repoURL: https://github.com/ahmadry98/PolyAIFursa.git
     targetRevision: dev
     path: infra/k8s/dev/yolo
+
   destination:
     server: https://kubernetes.default.svc
     namespace: dev
+
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
-    managedNamespaceMetadata:
-      labels:
-        pod-security.kubernetes.io/enforce: restricted
-        pod-security.kubernetes.io/audit: restricted
-        pod-security.kubernetes.io/warn: restricted

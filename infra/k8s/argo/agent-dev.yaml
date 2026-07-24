@@ -1,22 +1,22 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: yolo-prod
+  name: agent-dev
   namespace: argocd
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
-
   source:
     repoURL: https://github.com/ahmadry98/PolyAIFursa.git
-    targetRevision: main
-    path: infra/k8s/prod/yolo
-
+    targetRevision: dev
+    path: infra/k8s/dev/agent
   destination:
     server: https://kubernetes.default.svc
-    namespace: prod
-
+    namespace: dev
   syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
     syncOptions:
       - CreateNamespace=true
