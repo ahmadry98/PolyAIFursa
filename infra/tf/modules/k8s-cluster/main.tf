@@ -12,6 +12,9 @@ resource "aws_key_pair" "cluster" {
   })
 }
 
+# The control plane writes a non-expiring kubeadm join command to this encrypted
+# SSM parameter. ASG workers poll the parameter during boot, allowing replacement
+# instances to join the cluster automatically without storing the token in Git.
 resource "aws_ssm_parameter" "kubeadm_join" {
   name        = local.join_parameter_name
   description = "Encrypted kubeadm join command written by the control plane"
