@@ -28,8 +28,21 @@ sysctl --system
 
 install -m 0755 -d /etc/apt/keyrings
 apt-get update
-apt-get install -y ca-certificates curl gpg awscli
+apt-get install -y ca-certificates curl gpg unzip
 
+if ! command -v aws >/dev/null 2>&1; then
+  AWSCLI_TMP_DIR=$(mktemp -d)
+
+  curl -fsSL \
+    "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" \
+    -o "$${AWSCLI_TMP_DIR}/awscliv2.zip"
+
+  unzip -q \
+    "$${AWSCLI_TMP_DIR}/awscliv2.zip" \
+    -d "$${AWSCLI_TMP_DIR}"
+
+  "$${AWSCLI_TMP_DIR}/aws/install"
+fi
 curl -fsSL "https://pkgs.k8s.io/core:/stable:/$${KUBERNETES_VERSION}/deb/Release.key" \
   | gpg --dearmor --yes -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
