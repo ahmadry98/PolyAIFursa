@@ -1,0 +1,393 @@
+name: Provision and bootstrap Kubernetes cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: AWS region to provision
+        required: true
+        default: us-east-1
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: kubernetes-cluster-${{ inputs.region }}
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  provision:
+    name: Provision infrastructure
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    outputs:
+      control_plane_ip: ${{ steps.terraform_outputs.outputs.control_plane_ip }}
+      control_plane_security_group_id: ${{ steps.terraform_outputs.outputs.control_plane_security_group_id }}
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Configure AWS credentials with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ inputs.region }}
+          role-session-name: polyai-cluster-${{ github.run_id }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4.0.1
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - name: Prepare the cluster SSH public key
+        env:
+          CLUSTER_SSH_PRIVATE_KEY: ${{ secrets.CLUSTER_SSH_PRIVATE_KEY }}
+        run: |
+          install -d -m 0700 "${HOME}/.ssh"
+          printf '%s\n' "${CLUSTER_SSH_PRIVATE_KEY}" \
+            > "${HOME}/.ssh/polyai-k8s"
+          chmod 0600 "${HOME}/.ssh/polyai-k8s"
+
+          public_key="$(ssh-keygen -y -f "${HOME}/.ssh/polyai-k8s")"
+          echo "TF_VAR_ssh_public_key=${public_key}" >> "${GITHUB_ENV}"
+
+      - name: Verify the regional variable file
+        working-directory: infra/tf
+        env:
+          REGION: ${{ inputs.region }}
+        run: |
+          test -f "tfvars/${REGION}.tfvars"
+
+      - name: Initialize Terraform
+        working-directory: infra/tf
+        run: terraform init -input=false
+
+      - name: Select or create the regional workspace
+        working-directory: infra/tf
+        env:
+          REGION: ${{ inputs.region }}
+        run: |
+          terraform workspace select "${REGION}" ||
+            terraform workspace new "${REGION}"
+
+      - name: Validate Terraform
+        working-directory: infra/tf
+        run: |
+          terraform fmt -check -recursive
+          terraform validate
+
+      - name: Plan the infrastructure
+        working-directory: infra/tf
+        env:
+          REGION: ${{ inputs.region }}
+        run: |
+          terraform plan \
+            -input=false \
+            -var-file="tfvars/${REGION}.tfvars" \
+            -out="cluster.tfplan"
+
+      - name: Apply the infrastructure
+        working-directory: infra/tf
+        run: |
+          terraform apply \
+            -input=false \
+            -auto-approve \
+            "cluster.tfplan"
+
+      - name: Export Terraform outputs
+        id: terraform_outputs
+        working-directory: infra/tf
+        run: |
+          echo "control_plane_ip=$(terraform output -raw control_plane_public_ip)" \
+            >> "${GITHUB_OUTPUT}"
+
+          echo "control_plane_security_group_id=$(terraform output -raw control_plane_security_group_id)" \
+            >> "${GITHUB_OUTPUT}"
+
+  bootstrap:
+    name: Bootstrap cluster services
+    needs: provision
+    runs-on: ubuntu-latest
+
+    env:
+      CONTROL_PLANE_IP: ${{ needs.provision.outputs.control_plane_ip }}
+      CONTROL_PLANE_SECURITY_GROUP_ID: ${{ needs.provision.outputs.control_plane_security_group_id }}
+      SSH_KEY_PATH: /home/runner/.ssh/polyai-k8s
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Configure AWS credentials with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ inputs.region }}
+          role-session-name: polyai-bootstrap-${{ github.run_id }}
+
+      - name: Prepare the cluster SSH private key
+        env:
+          CLUSTER_SSH_PRIVATE_KEY: ${{ secrets.CLUSTER_SSH_PRIVATE_KEY }}
+        run: |
+          install -d -m 0700 "${HOME}/.ssh"
+          printf '%s\n' "${CLUSTER_SSH_PRIVATE_KEY}" > "${SSH_KEY_PATH}"
+          chmod 0600 "${SSH_KEY_PATH}"
+
+      - name: Detect the GitHub runner public IP
+        id: runner_ip
+        run: |
+          runner_ip="$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')"
+
+          if [[ ! "${runner_ip}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+            echo "Unable to determine a valid runner IPv4 address" >&2
+            exit 1
+          fi
+
+          echo "cidr=${runner_ip}/32" >> "${GITHUB_OUTPUT}"
+
+      - name: Temporarily allow SSH from the GitHub runner
+        id: open_ssh
+        env:
+          RUNNER_CIDR: ${{ steps.runner_ip.outputs.cidr }}
+        run: |
+          permissions="$(
+            jq -nc \
+              --arg cidr "${RUNNER_CIDR}" \
+              --arg description "GitHub Actions bootstrap ${GITHUB_RUN_ID}" \
+              '[{
+                IpProtocol: "tcp",
+                FromPort: 22,
+                ToPort: 22,
+                IpRanges: [{
+                  CidrIp: $cidr,
+                  Description: $description
+                }]
+              }]'
+          )"
+
+          rule_id="$(
+            aws ec2 authorize-security-group-ingress \
+              --group-id "${CONTROL_PLANE_SECURITY_GROUP_ID}" \
+              --ip-permissions "${permissions}" \
+              --query 'SecurityGroupRules[0].SecurityGroupRuleId' \
+              --output text
+          )"
+
+          echo "security_group_rule_id=${rule_id}" >> "${GITHUB_OUTPUT}"
+
+      - name: Wait for the control plane
+        run: |
+          connected=false
+
+          for attempt in $(seq 1 60); do
+            if ssh \
+              -i "${SSH_KEY_PATH}" \
+              -o BatchMode=yes \
+              -o ConnectTimeout=10 \
+              -o StrictHostKeyChecking=accept-new \
+              "ubuntu@${CONTROL_PLANE_IP}" \
+              true; then
+              connected=true
+              break
+            fi
+
+            echo "SSH is not ready yet (${attempt}/60)"
+            sleep 10
+          done
+
+          if [[ "${connected}" != "true" ]]; then
+            echo "Timed out waiting for SSH" >&2
+            exit 1
+          fi
+
+          timeout 1200 ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'cloud-init status --wait &&
+             sudo test -f /var/lib/polyai-control-plane-ready'
+
+      - name: Install and verify Calico
+        run: |
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+
+          kubectl apply \
+            --server-side \
+            --force-conflicts \
+            -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/v1_crd_projectcalico_org.yaml
+
+          kubectl apply \
+            --server-side \
+            --force-conflicts \
+            -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/tigera-operator.yaml
+
+          kubectl rollout status \
+            deployment/tigera-operator \
+            -n tigera-operator \
+            --timeout=300s
+
+          kubectl apply \
+            -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/custom-resources.yaml
+
+          kubectl wait \
+            tigerastatus/calico \
+            --for=condition=Available \
+            --timeout=600s
+
+          kubectl wait \
+            tigerastatus/apiserver \
+            --for=condition=Available \
+            --timeout=600s
+
+          for attempt in $(seq 1 60); do
+            ready_nodes="$(
+              kubectl get nodes --no-headers |
+                awk '$2 == "Ready" { count++ } END { print count + 0 }'
+            )"
+
+            if (( ready_nodes >= 2 )); then
+              kubectl get nodes -o wide
+              exit 0
+            fi
+
+            echo "Waiting for two Ready nodes (${attempt}/60)"
+            sleep 10
+          done
+
+          kubectl get nodes -o wide
+          echo "Timed out waiting for the control plane and one worker" >&2
+          exit 1
+          REMOTE
+
+      - name: Install and verify Argo CD
+        run: |
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+
+          kubectl create namespace argocd \
+            --dry-run=client \
+            -o yaml |
+            kubectl apply -f -
+
+          kubectl apply \
+            --server-side \
+            --force-conflicts \
+            -n argocd \
+            -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.4.2/manifests/install.yaml
+
+          kubectl wait \
+            --for=condition=Available \
+            deployment \
+            --all \
+            -n argocd \
+            --timeout=600s
+
+          kubectl rollout status \
+            statefulset/argocd-application-controller \
+            -n argocd \
+            --timeout=600s
+
+          kubectl get pods -n argocd -o wide
+          REMOTE
+
+      - name: Bootstrap namespaces and Argo CD Applications
+        run: |
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'kubectl apply -f -' \
+            < infra/k8s/00-namespaces.yaml
+
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'kubectl apply --dry-run=server -n argocd -f -' \
+            < infra/k8s/argo/app-of-apps.yaml
+
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'kubectl apply -n argocd -f -' \
+            < infra/k8s/argo/app-of-apps.yaml
+
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+
+          expected_applications=(
+            app-of-apps
+            agent-dev
+            agent-prod
+            frontend-dev
+            frontend-prod
+            img-proc-mcp-dev
+            img-proc-mcp-prod
+            yolo-dev
+            yolo-prod
+          )
+
+          for attempt in $(seq 1 60); do
+            missing=false
+
+            for application in "${expected_applications[@]}"; do
+              if ! kubectl get application \
+                "${application}" \
+                -n argocd \
+                >/dev/null 2>&1; then
+                missing=true
+                break
+              fi
+            done
+
+            if [[ "${missing}" == "false" ]]; then
+              kubectl get applications -n argocd
+              exit 0
+            fi
+
+            echo "Waiting for all Argo CD Applications (${attempt}/60)"
+            sleep 10
+          done
+
+          kubectl get applications -n argocd
+          echo "Timed out waiting for the app-of-apps children" >&2
+          exit 1
+          REMOTE
+
+      - name: Remove the temporary SSH rule
+        if: ${{ always() && steps.open_ssh.outputs.security_group_rule_id != '' }}
+        env:
+          SECURITY_GROUP_RULE_ID: ${{ steps.open_ssh.outputs.security_group_rule_id }}
+        run: |
+          aws ec2 revoke-security-group-ingress \
+            --group-id "${CONTROL_PLANE_SECURITY_GROUP_ID}" \
+            --security-group-rule-ids "${SECURITY_GROUP_RULE_ID}"
