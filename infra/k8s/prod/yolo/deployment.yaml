@@ -29,7 +29,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: yolo
-          image: docker.io/ahmadray98/polyai-fursa-yolo:9f84011e6e7821e4422774af37e2de405b3aad32
+          image: docker.io/ahmadray98/polyai-fursa-yolo:7318fb683746f530335a83f7d8f3760255eb57d4
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
