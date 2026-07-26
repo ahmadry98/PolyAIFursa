@@ -26,7 +26,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: img-proc-mcp
-          image: docker.io/ahmadray98/polyai-fursa-img-proc-mcp:latest
+          image: docker.io/ahmadray98/polyai-fursa-img-proc-mcp:7318fb683746f530335a83f7d8f3760255eb57d4
           imagePullPolicy: Always
           ports:
             - name: http

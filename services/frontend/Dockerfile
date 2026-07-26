@@ -37,7 +37,7 @@ WORKDIR /app
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 
-USER node
+USER 1000:1000
 
 EXPOSE 3000
 

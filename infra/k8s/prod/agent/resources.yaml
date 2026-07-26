@@ -20,11 +20,13 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: agent
-          image: docker.io/ahmadray98/polyai-fursa-agent:latest
+          image: docker.io/ahmadray98/polyai-fursa-agent:7318fb683746f530335a83f7d8f3760255eb57d4
           imagePullPolicy: Always
           ports:
             - name: http

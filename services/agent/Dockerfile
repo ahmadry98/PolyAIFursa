@@ -9,14 +9,15 @@ WORKDIR /app
 COPY services/agent/requirements.txt ./requirements.txt
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt \
-    && addgroup --system app \
-    && adduser --system --ingroup app app
+    && addgroup --gid 10001 app \
+    && adduser --uid 10001 --gid 10001 --disabled-password \
+        --gecos "" --no-create-home app
 
 COPY services/agent/*.py ./
 
 RUN chown -R app:app /app
 
-USER app
+USER 10001:10001
 
 EXPOSE 8000
 

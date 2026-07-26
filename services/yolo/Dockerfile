@@ -18,8 +18,9 @@ RUN pip install --upgrade pip \
     && pip install -r torch-requirements.txt \
     && pip install -r requirements.txt \
     && pip install --upgrade "setuptools>=78.1.1" \
-    && addgroup --system app \
-    && adduser --system --ingroup app app
+    && addgroup --gid 10001 app \
+    && adduser --uid 10001 --gid 10001 --disabled-password \
+        --gecos "" --no-create-home app
 
 COPY app.py .
 COPY database.py .
@@ -30,7 +31,7 @@ COPY s3_utils.py .
 RUN mkdir -p uploads/original uploads/predicted /tmp/ultralytics \
     && chown -R app:app /app /tmp/ultralytics
 
-USER app
+USER 10001:10001
 
 EXPOSE 8080
 
