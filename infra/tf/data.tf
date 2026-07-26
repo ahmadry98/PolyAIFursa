@@ -1,6 +1,7 @@
 data "aws_availability_zones" "available" {
   state = "available"
 }
+
 data "aws_ami" "ubuntu" {
   most_recent = true
   owners      = ["099720109477"]
@@ -13,6 +14,11 @@ data "aws_ami" "ubuntu" {
   filter {
     name   = "architecture"
     values = ["x86_64"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
   }
 
   filter {

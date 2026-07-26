@@ -1,93 +1,113 @@
-# YOLO GitOps with Argo CD
+# PolyAI GitOps with Argo CD
 
-## What happens
+Argo CD manages four PolyAI microservices across two environments:
 
-1. A push that changes `services/yolo` on `dev` or `main` starts the GitHub Actions workflow.
-2. The workflow builds and pushes `polyai-fursa-yolo:<git-sha>` to Docker Hub.
-3. The workflow changes the image in the matching Git manifest and commits it back.
-4. Argo CD notices that Git changed. `yolo-dev` syncs automatically; `yolo-prod` waits for a manual sync.
+| Service | Development Application | Production Application |
+|---|---|---|
+| Agent | `agent-dev` | `agent-prod` |
+| Frontend | `frontend-dev` | `frontend-prod` |
+| Image processing MCP | `img-proc-mcp-dev` | `img-proc-mcp-prod` |
+| YOLO | `yolo-dev` | `yolo-prod` |
 
-The cluster is changed by Argo CD, not by GitHub Actions. Git remains the desired-state audit trail.
+## GitOps flow
 
-## Assumptions
+1. Application code is changed and tested.
+2. CI builds a container image tagged with the Git commit SHA.
+3. CI updates the corresponding Kubernetes manifest in Git.
+4. Argo CD detects the manifest change.
+5. Development synchronizes automatically.
+6. Production waits for manual review and synchronization.
 
-- Kubernetes 1.25 or newer with a CNI that enforces NetworkPolicy if policies are later added.
-- Argo CD is installed in the `argocd` namespace.
-- This public repository is reachable by Argo CD. A private repository needs repository credentials in Argo CD.
-- GitHub contains `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets.
-- The SHA currently in each deployment must exist in Docker Hub. The next successful workflow run replaces it.
-- `dev` and `main` branches both contain their corresponding manifest directories and the workflow.
+Git is the desired-state source of truth. GitHub Actions builds images and
+updates Git; Argo CD is responsible for changing Kubernetes resources.
 
-## One-time bootstrap
+## Environment behavior
 
-Install Argo CD only after checking the manifest version you intend to run. Pinning a release is safer than relying permanently on the moving `stable` URL:
+Development Applications:
+
+- Follow the `dev` branch.
+- Deploy into the `dev` namespace.
+- Enable automatic synchronization.
+- Enable pruning and self-healing.
+
+Production Applications:
+
+- Follow the `main` branch.
+- Deploy into the `prod` namespace.
+- Require manual synchronization.
+- Do not automatically prune resources.
+
+The namespaces and their Pod Security Admission labels are managed centrally by
+`infra/k8s/00-namespaces.yaml`, not by individual Applications.
+
+## App-of-apps
+
+`app-of-apps.yaml` is the root Argo CD Application. It follows `main` and reads
+the Application definitions from `infra/k8s/argo`.
+
+It creates eight child Applications while excluding itself to prevent recursive
+self-management.
+
+## Bootstrap
+
+Create the namespaces:
+
+```bash
+kubectl apply -f infra/k8s/00-namespaces.yaml
+```
+
+Install Argo CD v3.4.2:
 
 ```bash
 kubectl create namespace argocd
-kubectl apply --server-side -n argocd \
-  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-kubectl rollout status deployment/argocd-server -n argocd --timeout=5m
+
+kubectl apply \
+  --server-side \
+  --force-conflicts \
+  -n argocd \
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.4.2/manifests/install.yaml
 ```
 
-Commit and push these files before bootstrapping the root application:
+These commands must run on the control-plane EC2 instance, where `kubectl` has
+the cluster kubeconfig. Argo CD is already installed on the current cluster.
+
+After the manifests are committed and pushed, bootstrap the root Application:
 
 ```bash
-kubectl apply --dry-run=server -f infra/k8s/argo/app-of-apps.yaml
-kubectl apply -f infra/k8s/argo/app-of-apps.yaml
+kubectl apply \
+  -n argocd \
+  -f infra/k8s/argo/app-of-apps.yaml
+```
+
+## Observe applications
+
+```bash
 kubectl get applications -n argocd
+kubectl get deployments,pods,services -n dev
+kubectl get deployments,pods,services -n prod
 ```
 
-The root app reads `main` and creates the two child applications. Its directory rule excludes itself, avoiding recursive self-management.
+## Production promotion
 
-## Observe dev
+Production does not synchronize automatically. Review and synchronize the
+selected production Application in the Argo CD UI:
 
-```bash
-kubectl get application yolo-dev -n argocd
-kubectl get deployment,pods,service -n dev
-kubectl rollout status deployment/yolo -n dev
-```
+1. Open `<service>-prod`.
+2. Select **Diff**.
+3. Review the proposed changes.
+4. Select **Sync**.
 
-To inspect the UI locally:
+## Rollback
 
-```bash
-kubectl port-forward service/argocd-server -n argocd 8080:443
-```
-
-Open `https://localhost:8080`. The username is `admin`; retrieve the temporary password with:
-
-```bash
-kubectl get secret argocd-initial-admin-secret -n argocd \
-  -o jsonpath='{.data.password}' | base64 --decode
-```
-
-Change the password and remove the initial secret after first login.
-
-## Promote prod
-
-The `main` workflow updates `infra/k8s/prod/yolo/deployment.yaml`, but prod does not auto-sync. Review first:
-
-```bash
-argocd app diff yolo-prod
-argocd app sync yolo-prod
-argocd app wait yolo-prod --health
-```
-
-In the UI, the equivalent is **yolo-prod → Diff → Sync**.
-
-## Roll back
-
-GitOps rollback means reverting the manifest commit so Git and the cluster agree:
+Revert the Git commit that changed the deployment manifest:
 
 ```bash
 git revert <deployment-commit>
 git push
 ```
 
-Dev reconciles the revert automatically. For prod, review the Argo CD diff and sync again. `kubectl rollout undo` is only an emergency measure: Argo CD will see it as drift, so follow it with a Git revert.
+Development reconciles the revert automatically. Production requires another
+review and manual synchronization.
 
-## Important boundaries
-
-- Dev owns only resources under `infra/k8s/dev/yolo`; automated pruning is safe only while that ownership stays narrow.
-- Prod deliberately has no `automated` policy.
-- Do not store AWS keys or other plaintext secrets in this repository. Use workload identity or a secrets operator for credentials.
-- Installing Argo CD grants a controller significant cluster access. Restrict its projects/RBAC before using this design for a shared or production cluster.
+Avoid `kubectl rollout undo` as the normal rollback method because Argo CD sees
+it as drift from Git.
