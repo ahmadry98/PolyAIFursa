@@ -26,7 +26,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: agent
-          image: docker.io/ahmadray98/polyai-fursa-agent:7318fb683746f530335a83f7d8f3760255eb57d4
+          image: docker.io/ahmadray98/polyai-fursa-agent:711c8c7c84f722daea507420828df4e3fd314b25
           imagePullPolicy: Always
           ports:
             - name: http
