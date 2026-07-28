@@ -26,7 +26,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: frontend
-          image: docker.io/ahmadray98/polyai-fursa-frontend:dc50c442936e2bf320c52b00bdf571d34fc53b74
+          image: docker.io/ahmadray98/polyai-fursa-frontend:08e26abc3e322c32533bb6d411504227fca74fb7
           imagePullPolicy: Always
           ports:
             - name: http
