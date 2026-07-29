@@ -240,9 +240,23 @@ jobs:
             deployment/tigera-operator \
             -n tigera-operator \
             --timeout=300s
+          REMOTE
 
-          kubectl apply \
-            -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/custom-resources.yaml
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'kubectl apply -f -' \
+            < infra/k8s/calico/custom-resources.yaml
+
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
 
           kubectl wait \
             tigerastatus/calico \
@@ -261,6 +275,17 @@ jobs:
             )"
 
             if (( ready_nodes >= 2 )); then
+              encapsulation="$(
+                kubectl get installation default \
+                  -o jsonpath='{.spec.calicoNetwork.ipPools[0].encapsulation}'
+              )"
+
+              if [[ "${encapsulation}" != "VXLAN" ]]; then
+                echo "Expected Calico VXLAN, found ${encapsulation}" >&2
+                exit 1
+              fi
+
+              echo "Calico encapsulation: ${encapsulation}"
               kubectl get nodes -o wide
               exit 0
             fi
