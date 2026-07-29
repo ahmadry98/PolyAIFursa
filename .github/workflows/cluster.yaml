@@ -260,6 +260,16 @@ jobs:
 
           kubectl wait \
             tigerastatus/calico \
+            --for=create \
+            --timeout=300s
+
+          kubectl wait \
+            tigerastatus/apiserver \
+            --for=create \
+            --timeout=300s
+
+          kubectl wait \
+            tigerastatus/calico \
             --for=condition=Available \
             --timeout=600s
 
