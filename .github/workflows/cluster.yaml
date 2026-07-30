@@ -213,8 +213,29 @@ jobs:
             -o BatchMode=yes \
             -o StrictHostKeyChecking=accept-new \
             "ubuntu@${CONTROL_PLANE_IP}" \
-            'cloud-init status --wait &&
-             sudo test -f /var/lib/polyai-control-plane-ready'
+            'bash -se' <<'REMOTE'
+          set +e
+          cloud-init status --wait
+          cloud_init_status=$?
+          set -e
+
+          case "${cloud_init_status}" in
+            0)
+              ;;
+            2)
+              echo "cloud-init completed with recoverable errors; validating the cluster bootstrap"
+              ;;
+            *)
+              echo "cloud-init failed with exit code ${cloud_init_status}" >&2
+              exit "${cloud_init_status}"
+              ;;
+          esac
+
+          sudo test -f /var/lib/polyai-control-plane-ready
+          sudo test -f /etc/kubernetes/admin.conf
+          sudo systemctl is-active --quiet crio
+          sudo systemctl is-active --quiet kubelet
+          REMOTE
 
       - name: Install and verify Calico
         run: |
