@@ -1,7 +1,11 @@
 locals {
   join_parameter_name = "/polyai/${var.name_prefix}/kubeadm-join"
-  worker_min_size     = var.worker_desired_capacity == 0 ? 0 : 1
+  worker_min_size     = var.enable_cluster_autoscaler || var.worker_desired_capacity == 0 ? 0 : 1
 }
+
+data "aws_caller_identity" "current" {}
+
+data "aws_partition" "current" {}
 
 resource "aws_key_pair" "cluster" {
   key_name   = "${var.name_prefix}-key"
@@ -90,6 +94,11 @@ resource "aws_iam_role_policy_attachment" "worker_ecr" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
 
+resource "aws_iam_role_policy_attachment" "worker_ebs_csi" {
+  role       = aws_iam_role.worker.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
+
 data "aws_iam_policy_document" "worker_runtime" {
   statement {
     sid       = "ReadJoinParameter"
@@ -124,6 +133,50 @@ data "aws_iam_policy_document" "worker_runtime" {
       "bedrock:InvokeModelWithResponseStream",
     ]
     resources = ["*"]
+  }
+
+  statement {
+    sid       = "PublishAlertNotifications"
+    effect    = "Allow"
+    actions   = ["sns:Publish"]
+    resources = [var.alert_sns_topic_arn]
+  }
+
+  dynamic "statement" {
+    for_each = var.enable_cluster_autoscaler ? [1] : []
+
+    content {
+      sid    = "DescribeAutoscalingResources"
+      effect = "Allow"
+      actions = [
+        "autoscaling:DescribeAutoScalingGroups",
+        "autoscaling:DescribeAutoScalingInstances",
+        "autoscaling:DescribeLaunchConfigurations",
+        "autoscaling:DescribeScalingActivities",
+        "autoscaling:DescribeTags",
+        "ec2:DescribeImages",
+        "ec2:DescribeInstanceTypes",
+        "ec2:DescribeLaunchTemplateVersions",
+        "ec2:GetInstanceTypesFromInstanceRequirements",
+      ]
+      resources = ["*"]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.enable_cluster_autoscaler ? [1] : []
+
+    content {
+      sid    = "ScaleWorkerGroup"
+      effect = "Allow"
+      actions = [
+        "autoscaling:SetDesiredCapacity",
+        "autoscaling:TerminateInstanceInAutoScalingGroup",
+      ]
+      resources = [
+        "arn:${data.aws_partition.current.partition}:autoscaling:${var.region}:${data.aws_caller_identity.current.account_id}:autoScalingGroup:*:autoScalingGroupName/${var.name_prefix}-workers",
+      ]
+    }
   }
 }
 
@@ -298,6 +351,7 @@ resource "aws_launch_template" "worker" {
 
   depends_on = [
     aws_iam_role_policy.worker_runtime,
+    aws_iam_role_policy_attachment.worker_ebs_csi,
     aws_iam_role_policy_attachment.worker_ecr,
   ]
 }
@@ -324,10 +378,17 @@ resource "aws_autoscaling_group" "workers" {
   }
 
   dynamic "tag" {
-    for_each = merge(var.tags, {
-      Name = "${var.name_prefix}-worker"
-      Role = "worker"
-    })
+    for_each = merge(
+      var.tags,
+      {
+        Name = "${var.name_prefix}-worker"
+        Role = "worker"
+      },
+      var.enable_cluster_autoscaler ? {
+        "k8s.io/cluster-autoscaler/enabled"            = "true"
+        "k8s.io/cluster-autoscaler/${var.name_prefix}" = "owned"
+      } : {}
+    )
 
     content {
       key                 = tag.key

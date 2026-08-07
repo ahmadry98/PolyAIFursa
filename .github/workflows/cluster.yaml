@@ -8,6 +8,15 @@ on:
         required: true
         default: us-east-1
         type: string
+      alert_email:
+        description: Email address that receives Alertmanager notifications
+        required: true
+        type: string
+      enable_cluster_autoscaler:
+        description: Install the optional AWS Cluster Autoscaler
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -26,9 +35,15 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
+    env:
+      TF_VAR_alert_email: ${{ inputs.alert_email }}
+      TF_VAR_enable_cluster_autoscaler: ${{ inputs.enable_cluster_autoscaler }}
+
     outputs:
+      alert_sns_topic_arn: ${{ steps.terraform_outputs.outputs.alert_sns_topic_arn }}
       control_plane_ip: ${{ steps.terraform_outputs.outputs.control_plane_ip }}
       control_plane_security_group_id: ${{ steps.terraform_outputs.outputs.control_plane_security_group_id }}
+      worker_asg_name: ${{ steps.terraform_outputs.outputs.worker_asg_name }}
 
     steps:
       - name: Check out the repository
@@ -106,11 +121,12 @@ jobs:
         id: terraform_outputs
         working-directory: infra/tf
         run: |
-          echo "control_plane_ip=$(terraform output -raw control_plane_public_ip)" \
-            >> "${GITHUB_OUTPUT}"
-
-          echo "control_plane_security_group_id=$(terraform output -raw control_plane_security_group_id)" \
-            >> "${GITHUB_OUTPUT}"
+          {
+            echo "alert_sns_topic_arn=$(terraform output -raw alert_sns_topic_arn)"
+            echo "control_plane_ip=$(terraform output -raw control_plane_public_ip)"
+            echo "control_plane_security_group_id=$(terraform output -raw control_plane_security_group_id)"
+            echo "worker_asg_name=$(terraform output -raw worker_asg_name)"
+          } >> "${GITHUB_OUTPUT}"
 
   bootstrap:
     name: Bootstrap cluster services
@@ -118,9 +134,11 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
+      ALERT_SNS_TOPIC_ARN: ${{ needs.provision.outputs.alert_sns_topic_arn }}
       CONTROL_PLANE_IP: ${{ needs.provision.outputs.control_plane_ip }}
       CONTROL_PLANE_SECURITY_GROUP_ID: ${{ needs.provision.outputs.control_plane_security_group_id }}
       SSH_KEY_PATH: /home/runner/.ssh/polyai-k8s
+      WORKER_ASG_NAME: ${{ needs.provision.outputs.worker_asg_name }}
 
     steps:
       - name: Check out the repository
@@ -330,6 +348,144 @@ jobs:
           exit 1
           REMOTE
 
+      - name: Install Helm and platform add-ons
+        env:
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          REGION: ${{ inputs.region }}
+        run: |
+          if [[ -z "${GRAFANA_ADMIN_PASSWORD}" ]]; then
+            echo "GRAFANA_ADMIN_PASSWORD repository secret is required" >&2
+            exit 1
+          fi
+
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+
+          if ! command -v helm >/dev/null 2>&1; then
+            helm_tmp_dir="$(mktemp -d)"
+            curl -fsSL \
+              https://get.helm.sh/helm-v3.19.2-linux-amd64.tar.gz \
+              -o "${helm_tmp_dir}/helm.tar.gz"
+            tar -xzf "${helm_tmp_dir}/helm.tar.gz" -C "${helm_tmp_dir}"
+            sudo install -m 0755 "${helm_tmp_dir}/linux-amd64/helm" /usr/local/bin/helm
+          fi
+
+          helm version
+          helm repo add aws-ebs-csi-driver \
+            https://kubernetes-sigs.github.io/aws-ebs-csi-driver
+          helm repo add autoscaler \
+            https://kubernetes.github.io/autoscaler
+          helm repo add ingress-nginx \
+            https://kubernetes.github.io/ingress-nginx
+          helm repo add prometheus-community \
+            https://prometheus-community.github.io/helm-charts
+          helm repo update
+          REMOTE
+
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            "helm upgrade --install aws-ebs-csi-driver aws-ebs-csi-driver/aws-ebs-csi-driver --version 2.60.1 --namespace kube-system --set controller.region=${REGION} --wait --timeout 10m"
+
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'kubectl apply -f -' \
+            < infra/k8s/storage/ebs-sc.yaml
+
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx --version 4.15.1 --namespace ingress-nginx --create-namespace --values - --wait --timeout 10m' \
+            < infra/k8s/ingress-nginx/values.yaml
+
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -'
+
+          printf '%s' "${GRAFANA_ADMIN_PASSWORD}" | \
+            ssh \
+              -i "${SSH_KEY_PATH}" \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=accept-new \
+              "ubuntu@${CONTROL_PLANE_IP}" \
+              'kubectl create secret generic grafana-admin-credentials --namespace monitoring --from-literal=admin-user=admin --from-file=admin-password=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -'
+
+          sed \
+            -e "s|SNS_TOPIC_ARN_PLACEHOLDER|${ALERT_SNS_TOPIC_ARN}|g" \
+            -e "s|AWS_REGION_PLACEHOLDER|${REGION}|g" \
+            infra/k8s/monitoring/values.yaml | \
+            ssh \
+              -i "${SSH_KEY_PATH}" \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=accept-new \
+              "ubuntu@${CONTROL_PLANE_IP}" \
+              'helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack --version 86.0.0 --namespace monitoring --values - --wait --timeout 15m'
+
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'kubectl apply --dry-run=server -f -' \
+            < infra/k8s/monitoring/resources.yaml
+
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'kubectl apply -f -' \
+            < infra/k8s/monitoring/resources.yaml
+
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+
+          kubectl get storageclass ebs-sc
+          kubectl get service ingress-nginx-controller -n ingress-nginx \
+            -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}' | grep -qx 30080
+          kubectl get servicemonitor ingress-nginx-controller -n ingress-nginx
+          kubectl get pods -n monitoring -o wide
+          REMOTE
+
+      - name: Install optional Cluster Autoscaler
+        if: ${{ inputs.enable_cluster_autoscaler }}
+        env:
+          REGION: ${{ inputs.region }}
+        run: |
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            "helm upgrade --install cluster-autoscaler autoscaler/cluster-autoscaler --version 9.59.0 --namespace kube-system --set cloudProvider=aws --set awsRegion=${REGION} --set autoDiscovery.clusterName= --set autoscalingGroups[0].name=${WORKER_ASG_NAME} --set autoscalingGroups[0].minSize=0 --set autoscalingGroups[0].maxSize=3 --set image.tag=v1.35.0 --set serviceMonitor.enabled=true --wait --timeout 10m"
+
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'kubectl rollout status deployment/cluster-autoscaler -n kube-system --timeout=300s'
+
       - name: Install and verify Argo CD
         run: |
           ssh \
@@ -365,6 +521,22 @@ jobs:
 
           kubectl get pods -n argocd -o wide
           REMOTE
+
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'kubectl apply --dry-run=server -f -' \
+            < infra/k8s/argocd-ingress.yaml
+
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'kubectl apply -f -' \
+            < infra/k8s/argocd-ingress.yaml
 
       - name: Bootstrap namespaces and Argo CD Applications
         run: |

@@ -1,0 +1,90 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: grafana.fursa.click
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kube-prometheus-stack-grafana
+                port:
+                  number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: prometheus.fursa.click
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kube-prometheus-stack-prometheus
+                port:
+                  number: 9090
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: polyai-application-alerts
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: polyai.agent
+      rules:
+        - alert: AgentHighErrorRate
+          expr: |
+            sum by (namespace) (rate(agent_chat_requests_total{status="error"}[5m]))
+              /
+            clamp_min(sum by (namespace) (rate(agent_chat_requests_total[5m])), 0.001)
+              > 0.10
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: Agent error rate is above 10 percent
+            description: More than 10 percent of agent chat requests in {{ $labels.namespace }} have failed for two minutes.
+            runbook_url: https://github.com/ahmadry98/PolyAIFursa/blob/main/docs/task7-alert-runbook.md
+        - alert: AgentHighLatency
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (namespace, le) (rate(agent_chat_request_latency_seconds_bucket[5m]))
+            ) > 10
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Agent p95 latency is above 10 seconds
+            description: Agent p95 request latency in {{ $labels.namespace }} has exceeded 10 seconds for five minutes.
+            runbook_url: https://github.com/ahmadry98/PolyAIFursa/blob/main/docs/task7-alert-runbook.md
+    - name: polyai.yolo
+      rules:
+        - alert: YoloHighServerErrorRate
+          expr: |
+            sum by (namespace) (rate(http_requests_total{job="yolo",status=~"5.."}[5m]))
+              /
+            clamp_min(sum by (namespace) (rate(http_requests_total{job="yolo"}[5m])), 0.001)
+              > 0.05
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: YOLO server error rate is above 5 percent
+            description: More than 5 percent of YOLO HTTP requests in {{ $labels.namespace }} have returned 5xx responses for two minutes.
+            runbook_url: https://github.com/ahmadry98/PolyAIFursa/blob/main/docs/task7-alert-runbook.md

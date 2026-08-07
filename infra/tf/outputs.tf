@@ -37,3 +37,20 @@ output "ssh_command" {
   description = "Example command for connecting to the control plane"
   value       = "ssh ubuntu@${module.k8s_cluster.control_plane_public_ip}"
 }
+
+output "alert_sns_topic_arn" {
+  description = "SNS topic ARN used by Alertmanager"
+  value       = aws_sns_topic.alerts.arn
+}
+
+output "application_urls" {
+  description = "Public HTTPS URLs exposed through the application load balancer"
+  value = {
+    for name, hostname in local.public_hostnames : name => "https://${hostname}"
+  }
+}
+
+output "load_balancer_dns_name" {
+  description = "DNS name of the public application load balancer"
+  value       = module.ingress.load_balancer_dns_name
+}
