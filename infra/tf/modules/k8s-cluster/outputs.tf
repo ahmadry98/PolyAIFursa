@@ -23,6 +23,11 @@ output "worker_asg_name" {
   value       = aws_autoscaling_group.workers.name
 }
 
+output "worker_security_group_id" {
+  description = "Security group attached to worker nodes"
+  value       = aws_security_group.worker.id
+}
+
 output "join_parameter_name" {
   description = "SSM parameter name containing the protected join command"
   value       = aws_ssm_parameter.kubeadm_join.name

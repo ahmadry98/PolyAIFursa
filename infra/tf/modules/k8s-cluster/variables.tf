@@ -48,6 +48,12 @@ variable "control_plane_instance_type" {
   type        = string
 }
 
+variable "enable_cluster_autoscaler" {
+  description = "Whether the worker role and ASG are configured for Cluster Autoscaler"
+  type        = bool
+  default     = false
+}
+
 variable "worker_instance_type" {
   description = "EC2 type for ASG workers"
   type        = string
@@ -76,6 +82,11 @@ variable "ssh_public_key" {
 
 variable "application_s3_bucket" {
   description = "S3 bucket used by PolyAI workloads"
+  type        = string
+}
+
+variable "alert_sns_topic_arn" {
+  description = "SNS topic to which Alertmanager may publish notifications"
   type        = string
 }
 
