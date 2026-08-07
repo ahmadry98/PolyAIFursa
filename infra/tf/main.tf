@@ -17,6 +17,18 @@ module "vpc" {
   tags = local.common_tags
 }
 
+resource "aws_sns_topic" "alerts" {
+  name = "${local.name_prefix}-alerts"
+
+  tags = local.common_tags
+}
+
+resource "aws_sns_topic_subscription" "alert_email" {
+  topic_arn = aws_sns_topic.alerts.arn
+  protocol  = "email"
+  endpoint  = var.alert_email
+}
+
 module "k8s_cluster" {
   source = "./modules/k8s-cluster"
 
@@ -31,8 +43,25 @@ module "k8s_cluster" {
   control_plane_instance_type = var.control_plane_instance_type
   worker_instance_type        = var.worker_instance_type
   worker_desired_capacity     = var.worker_desired_capacity
+  enable_cluster_autoscaler   = var.enable_cluster_autoscaler
   admin_ssh_cidr              = var.admin_ssh_cidr
   ssh_public_key              = var.ssh_public_key
   application_s3_bucket       = var.application_s3_bucket
+  alert_sns_topic_arn         = aws_sns_topic.alerts.arn
   tags                        = local.common_tags
+}
+
+module "ingress" {
+  source = "./modules/ingress"
+
+  domain_name              = var.domain_name
+  hosted_zone_id           = data.aws_route53_zone.shared.zone_id
+  http_node_port           = var.ingress_http_node_port
+  name_prefix              = local.name_prefix
+  public_hostnames         = local.public_hostnames
+  public_subnet_ids        = module.vpc.public_subnets
+  tags                     = local.common_tags
+  vpc_id                   = module.vpc.vpc_id
+  worker_asg_name          = module.k8s_cluster.worker_asg_name
+  worker_security_group_id = module.k8s_cluster.worker_security_group_id
 }

@@ -84,3 +84,36 @@ variable "application_s3_bucket" {
   type        = string
   default     = "ahmad-polyai-images"
 }
+
+variable "alert_email" {
+  description = "Email address subscribed to infrastructure and application alerts"
+  type        = string
+
+  validation {
+    condition     = can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.alert_email))
+    error_message = "alert_email must be a valid email address."
+  }
+}
+
+variable "domain_name" {
+  description = "Existing public Route 53 hosted zone used for cluster endpoints"
+  type        = string
+  default     = "fursa.click"
+}
+
+variable "enable_cluster_autoscaler" {
+  description = "Whether to configure the worker ASG for the optional Cluster Autoscaler"
+  type        = bool
+  default     = false
+}
+
+variable "ingress_http_node_port" {
+  description = "Fixed ingress-nginx HTTP NodePort targeted by the ALB"
+  type        = number
+  default     = 30080
+
+  validation {
+    condition     = var.ingress_http_node_port >= 30000 && var.ingress_http_node_port <= 32767
+    error_message = "ingress_http_node_port must be within the Kubernetes NodePort range."
+  }
+}
