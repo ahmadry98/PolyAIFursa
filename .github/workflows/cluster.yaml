@@ -159,6 +159,53 @@ jobs:
           printf '%s\n' "${CLUSTER_SSH_PRIVATE_KEY}" > "${SSH_KEY_PATH}"
           chmod 0600 "${SSH_KEY_PATH}"
 
+      - name: Ensure a worker is available for bootstrap
+        run: |
+          desired_capacity="$(
+            aws autoscaling describe-auto-scaling-groups \
+              --auto-scaling-group-names "${WORKER_ASG_NAME}" \
+              --query 'AutoScalingGroups[0].DesiredCapacity' \
+              --output text
+          )"
+
+          if [[ "${desired_capacity}" == "None" ]]; then
+            echo "Worker Auto Scaling Group ${WORKER_ASG_NAME} was not found" >&2
+            exit 1
+          fi
+
+          if (( desired_capacity < 1 )); then
+            echo "Restoring one worker for cluster bootstrap"
+            aws autoscaling set-desired-capacity \
+              --auto-scaling-group-name "${WORKER_ASG_NAME}" \
+              --desired-capacity 1 \
+              --no-honor-cooldown
+          fi
+
+          for attempt in $(seq 1 60); do
+            in_service_workers="$(
+              aws autoscaling describe-auto-scaling-groups \
+                --auto-scaling-group-names "${WORKER_ASG_NAME}" \
+                --query "length(AutoScalingGroups[0].Instances[?LifecycleState=='InService'])" \
+                --output text
+            )"
+
+            if (( in_service_workers >= 1 )); then
+              echo "Worker instance is InService"
+              break
+            fi
+
+            if (( attempt == 60 )); then
+              echo "Timed out waiting for an InService worker instance" >&2
+              aws autoscaling describe-scaling-activities \
+                --auto-scaling-group-name "${WORKER_ASG_NAME}" \
+                --max-items 10
+              exit 1
+            fi
+
+            echo "Waiting for an InService worker instance (${attempt}/60)"
+            sleep 10
+          done
+
       - name: Detect the GitHub runner public IP
         id: runner_ip
         run: |
@@ -281,6 +328,8 @@ jobs:
             --timeout=300s
           REMOTE
 
+      - name: Configure Calico and verify worker readiness
+        run: |
           ssh \
             -i "${SSH_KEY_PATH}" \
             -o BatchMode=yes \
@@ -347,6 +396,38 @@ jobs:
           echo "Timed out waiting for the control plane and one worker" >&2
           exit 1
           REMOTE
+
+      - name: Collect worker bootstrap diagnostics
+        if: ${{ failure() }}
+        run: |
+          echo "Worker Auto Scaling Group state:"
+          aws autoscaling describe-auto-scaling-groups \
+            --auto-scaling-group-names "${WORKER_ASG_NAME}" \
+            --query 'AutoScalingGroups[0].{Min:MinSize,Max:MaxSize,Desired:DesiredCapacity,Instances:Instances}' \
+            --output json
+
+          echo "Recent scaling activities:"
+          aws autoscaling describe-scaling-activities \
+            --auto-scaling-group-name "${WORKER_ASG_NAME}" \
+            --max-items 10 \
+            --query 'Activities[].{Status:StatusCode,Description:Description,Cause:Cause,Message:StatusMessage}' \
+            --output table
+
+          worker_instance_ids="$(
+            aws autoscaling describe-auto-scaling-groups \
+              --auto-scaling-group-names "${WORKER_ASG_NAME}" \
+              --query 'AutoScalingGroups[0].Instances[].InstanceId' \
+              --output text
+          )"
+
+          for instance_id in ${worker_instance_ids}; do
+            echo "Console output for ${instance_id}:"
+            aws ec2 get-console-output \
+              --instance-id "${instance_id}" \
+              --latest \
+              --query Output \
+              --output text || true
+          done
 
       - name: Install Helm and platform add-ons
         env:
