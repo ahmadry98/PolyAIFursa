@@ -22,6 +22,7 @@ alertmanager:
       group_interval: 5m
       repeat_interval: 4h
     receivers:
+      - name: "null"
       - name: sns-email
         sns_configs:
           - send_resolved: true
