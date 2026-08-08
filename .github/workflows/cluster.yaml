@@ -452,6 +452,56 @@ jobs:
               --output text || true
           done
 
+      - name: Expose kube-proxy metrics inside the VPC
+        run: |
+          ssh \
+            -i "${SSH_KEY_PATH}" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "ubuntu@${CONTROL_PLANE_IP}" \
+            'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+
+          current_config="$(
+            kubectl get configmap kube-proxy \
+              -n kube-system \
+              -o jsonpath='{.data.config\.conf}'
+          )"
+
+          config_patch="$(
+            KUBE_PROXY_CONFIG="${current_config}" python3 -c '
+          import json
+          import os
+          import re
+
+          config = os.environ["KUBE_PROXY_CONFIG"]
+          updated, replacements = re.subn(
+              r"(?m)^metricsBindAddress:.*$",
+              "metricsBindAddress: " + chr(34) + "0.0.0.0:10249" + chr(34),
+              config,
+          )
+          if replacements != 1:
+              raise SystemExit("Expected exactly one metricsBindAddress setting")
+          print(json.dumps({"data": {"config.conf": updated}}))
+          '
+          )"
+
+          kubectl patch configmap kube-proxy \
+            -n kube-system \
+            --type merge \
+            -p "${config_patch}"
+
+          kubectl rollout restart daemonset/kube-proxy -n kube-system
+          kubectl rollout status daemonset/kube-proxy \
+            -n kube-system \
+            --timeout=300s
+
+          kubectl get configmap kube-proxy \
+            -n kube-system \
+            -o jsonpath='{.data.config\.conf}' | \
+            grep -q 'metricsBindAddress: "0.0.0.0:10249"'
+          REMOTE
+
       - name: Install Helm and platform add-ons
         env:
           GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}

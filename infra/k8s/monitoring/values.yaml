@@ -26,6 +26,7 @@ alertmanager:
       - name: sns-email
         sns_configs:
           - send_resolved: true
+            subject: '{{ .Status }}: {{ .CommonLabels.alertname }}'
             topic_arn: SNS_TOPIC_ARN_PLACEHOLDER
             sigv4:
               region: AWS_REGION_PLACEHOLDER
