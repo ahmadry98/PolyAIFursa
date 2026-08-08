@@ -496,7 +496,8 @@ jobs:
             -o BatchMode=yes \
             -o StrictHostKeyChecking=accept-new \
             "ubuntu@${CONTROL_PLANE_IP}" \
-            "helm upgrade --install aws-ebs-csi-driver aws-ebs-csi-driver/aws-ebs-csi-driver --version 2.60.1 --namespace kube-system --set controller.region=${REGION} --wait --timeout 10m"
+            "helm upgrade --install aws-ebs-csi-driver aws-ebs-csi-driver/aws-ebs-csi-driver --version 2.60.1 --namespace kube-system --set controller.region=${REGION} --values - --wait --timeout 10m" \
+            < infra/k8s/storage/ebs-csi-values.yaml
 
           ssh \
             -i "${SSH_KEY_PATH}" \
@@ -703,6 +704,8 @@ jobs:
             yolo-prod
           )
 
+          applications_ready=false
+
           for attempt in $(seq 1 60); do
             missing=false
 
@@ -717,16 +720,66 @@ jobs:
             done
 
             if [[ "${missing}" == "false" ]]; then
-              kubectl get applications -n argocd
-              exit 0
+              applications_ready=true
+              break
             fi
 
             echo "Waiting for all Argo CD Applications (${attempt}/60)"
             sleep 10
           done
 
+          if [[ "${applications_ready}" != "true" ]]; then
+            kubectl get applications -n argocd
+            echo "Timed out waiting for the app-of-apps children" >&2
+            exit 1
+          fi
+
+          production_applications=(
+            agent-prod
+            frontend-prod
+            img-proc-mcp-prod
+            yolo-prod
+          )
+
+          for application in "${production_applications[@]}"; do
+            kubectl patch application \
+              "${application}" \
+              -n argocd \
+              --type merge \
+              -p '{"operation":{"sync":{"prune":true,"syncOptions":["CreateNamespace=true"]}}}'
+          done
+
+          for attempt in $(seq 1 90); do
+            all_healthy=true
+
+            for application in "${expected_applications[@]}"; do
+              sync_status="$(
+                kubectl get application "${application}" -n argocd \
+                  -o jsonpath='{.status.sync.status}'
+              )"
+              health_status="$(
+                kubectl get application "${application}" -n argocd \
+                  -o jsonpath='{.status.health.status}'
+              )"
+
+              if [[ "${sync_status}" != "Synced" ]] || \
+                 [[ "${health_status}" != "Healthy" ]]; then
+                all_healthy=false
+                break
+              fi
+            done
+
+            if [[ "${all_healthy}" == "true" ]]; then
+              kubectl get applications -n argocd
+              exit 0
+            fi
+
+            echo "Waiting for all Argo CD Applications to become Synced and Healthy (${attempt}/90)"
+            sleep 10
+          done
+
           kubectl get applications -n argocd
-          echo "Timed out waiting for the app-of-apps children" >&2
+          echo "Timed out waiting for Argo CD Applications to become healthy" >&2
           exit 1
           REMOTE
 
