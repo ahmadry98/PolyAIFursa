@@ -41,6 +41,7 @@ jobs:
 
     outputs:
       alert_sns_topic_arn: ${{ steps.terraform_outputs.outputs.alert_sns_topic_arn }}
+      control_plane_instance_id: ${{ steps.terraform_outputs.outputs.control_plane_instance_id }}
       control_plane_ip: ${{ steps.terraform_outputs.outputs.control_plane_ip }}
       control_plane_security_group_id: ${{ steps.terraform_outputs.outputs.control_plane_security_group_id }}
       worker_asg_name: ${{ steps.terraform_outputs.outputs.worker_asg_name }}
@@ -123,6 +124,7 @@ jobs:
         run: |
           {
             echo "alert_sns_topic_arn=$(terraform output -raw alert_sns_topic_arn)"
+            echo "control_plane_instance_id=$(terraform output -raw control_plane_instance_id)"
             echo "control_plane_ip=$(terraform output -raw control_plane_public_ip)"
             echo "control_plane_security_group_id=$(terraform output -raw control_plane_security_group_id)"
             echo "worker_asg_name=$(terraform output -raw worker_asg_name)"
@@ -135,6 +137,7 @@ jobs:
 
     env:
       ALERT_SNS_TOPIC_ARN: ${{ needs.provision.outputs.alert_sns_topic_arn }}
+      CONTROL_PLANE_INSTANCE_ID: ${{ needs.provision.outputs.control_plane_instance_id }}
       CONTROL_PLANE_IP: ${{ needs.provision.outputs.control_plane_ip }}
       CONTROL_PLANE_SECURITY_GROUP_ID: ${{ needs.provision.outputs.control_plane_security_group_id }}
       SSH_KEY_PATH: /home/runner/.ssh/polyai-k8s
@@ -150,6 +153,26 @@ jobs:
           role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
           aws-region: ${{ inputs.region }}
           role-session-name: polyai-bootstrap-${{ github.run_id }}
+
+      - name: Resolve the current control-plane public IP
+        run: |
+          current_control_plane_ip="$(
+            aws ec2 describe-instances \
+              --instance-ids "${CONTROL_PLANE_INSTANCE_ID}" \
+              --query 'Reservations[0].Instances[0].PublicIpAddress' \
+              --output text
+          )"
+
+          if [[ ! "${current_control_plane_ip}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+            echo "Control-plane instance ${CONTROL_PLANE_INSTANCE_ID} has no public IPv4 address" >&2
+            exit 1
+          fi
+
+          if [[ "${current_control_plane_ip}" != "${CONTROL_PLANE_IP}" ]]; then
+            echo "Terraform output ${CONTROL_PLANE_IP} is stale; using ${current_control_plane_ip}"
+          fi
+
+          echo "CONTROL_PLANE_IP=${current_control_plane_ip}" >> "${GITHUB_ENV}"
 
       - name: Prepare the cluster SSH private key
         env:
